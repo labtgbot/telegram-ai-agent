@@ -59,6 +59,10 @@ def test_user_columns_and_constraints():
         "is_banned",
         "ban_reason",
         "banned_until",
+        "role",
+        "totp_secret",
+        "totp_enabled",
+        "last_login_at",
     }
     assert expected_columns == set(table.columns.keys())
 

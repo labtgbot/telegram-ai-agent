@@ -65,6 +65,17 @@ class User(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    role: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="user"
+    )
+    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     __table_args__ = (
         Index("ix_users_telegram_id", "telegram_id"),
         Index(
@@ -73,6 +84,11 @@ class User(Base):
             postgresql_where="is_premium = TRUE",
         ),
         Index("ix_users_referral", "referral_code"),
+        Index(
+            "ix_users_role",
+            "role",
+            postgresql_where="role <> 'user'",
+        ),
     )
 
     def __repr__(self) -> str:
