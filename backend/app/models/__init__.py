@@ -1,0 +1,22 @@
+"""SQLAlchemy ORM models.
+
+Importing this package registers every table on the shared ``Base.metadata``,
+which is what Alembic introspects in ``env.py``.
+"""
+from app.models.admin_setting import AdminSetting
+from app.models.base import Base
+from app.models.daily_analytics import DailyAnalytics
+from app.models.subscription import Subscription
+from app.models.token_usage_log import TokenUsageLog
+from app.models.transaction import Transaction
+from app.models.user import User
+
+__all__ = [
+    "AdminSetting",
+    "Base",
+    "DailyAnalytics",
+    "Subscription",
+    "TokenUsageLog",
+    "Transaction",
+    "User",
+]

@@ -21,13 +21,59 @@ jobs:
             test -f "$f" || (echo "Missing required doc: $f" && exit 1)
           done
 
-  # Заглушки для будущих job-ов — будут включаться по мере появления кода:
-  #
-  # backend:
-  #   uses: ./.github/workflows/backend.yml
-  #
-  # mini-app:
-  #   uses: ./.github/workflows/mini-app.yml
-  #
-  # admin-dashboard:
-  #   uses: ./.github/workflows/admin.yml
+  backend:
+    name: Backend (models, migrations, tests)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: telegram_ai_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d telegram_ai_agent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/telegram_ai_agent
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install backend (dev extras)
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        working-directory: backend
+        run: ruff check .
+
+      - name: Apply migrations to clean DB
+        working-directory: backend
+        run: alembic upgrade head
+
+      - name: Verify downgrade + upgrade cycle
+        working-directory: backend
+        run: |
+          alembic downgrade base
+          alembic upgrade head
+
+      - name: Seed dev data
+        run: python -m scripts.seed
+
+      - name: Run unit tests
+        working-directory: backend
+        run: pytest -v
