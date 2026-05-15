@@ -1,0 +1,48 @@
+# Local development stack.
+#
+# Запуск:   docker compose -f docker/compose.yml up -d
+# Логи:     docker compose -f docker/compose.yml logs -f
+# Stop:     docker compose -f docker/compose.yml down
+# Reset:    docker compose -f docker/compose.yml down -v
+#
+# Backend code is not built here yet (Phase 1 ограничивается схемой БД).
+# Запуск миграций из своего окружения:
+#   DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/telegram_ai_agent \
+#     alembic -c backend/alembic.ini upgrade head
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: tgai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: telegram_ai_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d telegram_ai_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: tgai-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:
