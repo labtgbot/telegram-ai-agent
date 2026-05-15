@@ -1,0 +1,73 @@
+# Multi-stage Dockerfile for the FastAPI backend.
+#
+# Stages:
+#   * base  — shared OS + Python + system deps.
+#   * dev   — installs full dev extras, mounts source at runtime, runs uvicorn --reload.
+#   * prod  — slim runtime image with installed wheel and pinned dependencies.
+#
+# Build:
+#   docker build -f docker/Dockerfile.backend --target dev  -t tgai-backend:dev .
+#   docker build -f docker/Dockerfile.backend --target prod -t tgai-backend:prod .
+
+ARG PYTHON_VERSION=3.11
+FROM python:${PYTHON_VERSION}-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# ---------- dev ----------
+FROM base AS dev
+
+COPY backend/pyproject.toml /app/backend/pyproject.toml
+COPY backend/README.md /app/backend/README.md
+
+RUN pip install --upgrade pip \
+    && pip install -e "/app/backend[dev]"
+
+COPY backend /app/backend
+
+ENV PYTHONPATH=/app/backend
+WORKDIR /app/backend
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--reload", "--host", "0.0.0.0", "--port", "8000"]
+
+# ---------- prod ----------
+FROM base AS prod
+
+COPY backend/pyproject.toml /app/backend/pyproject.toml
+COPY backend/README.md /app/backend/README.md
+
+RUN pip install --upgrade pip \
+    && pip install "/app/backend"
+
+COPY backend /app/backend
+
+ENV PYTHONPATH=/app/backend \
+    APP_ENV=production \
+    APP_DEBUG=false
+
+WORKDIR /app/backend
+
+EXPOSE 8000
+
+RUN useradd --create-home --uid 1000 app \
+    && chown -R app:app /app
+USER app
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl --fail --silent http://localhost:8000/api/v1/health/live || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

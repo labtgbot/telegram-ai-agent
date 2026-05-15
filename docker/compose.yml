@@ -5,10 +5,12 @@
 # Stop:     docker compose -f docker/compose.yml down
 # Reset:    docker compose -f docker/compose.yml down -v
 #
-# Backend code is not built here yet (Phase 1 ограничивается схемой БД).
-# Запуск миграций из своего окружения:
-#   DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/telegram_ai_agent \
-#     alembic -c backend/alembic.ini upgrade head
+# Backend образ собирается из docker/Dockerfile.backend (target=dev) и слушает на
+# http://localhost:8000. Сервис ожидает готовности postgres и redis через
+# healthcheck, миграции запускаются вручную (см. ниже).
+#
+# Применить миграции (после поднятия стека):
+#   docker compose -f docker/compose.yml exec backend alembic upgrade head
 
 services:
   postgres:
@@ -42,6 +44,36 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+      target: dev
+    container_name: tgai-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP_ENV: development
+      APP_DEBUG: "true"
+      LOG_LEVEL: INFO
+      LOG_FORMAT: console
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/telegram_ai_agent
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend:/app/backend
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health/live').status == 200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
 volumes:
   postgres_data:
