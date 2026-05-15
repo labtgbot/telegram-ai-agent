@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint-docs:
+    name: Lint docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify required docs exist
+        run: |
+          set -e
+          for f in README.md CONTRIBUTING.md docs/ARCHITECTURE.md docs/ROADMAP.md \
+                   docs/TOKEN_ECONOMY.md docs/DATABASE_SCHEMA.md docs/API_REFERENCE.md \
+                   docs/ADMIN_CRM_GUIDE.md docs/SECURITY.md docs/DEPLOYMENT.md \
+                   docs/PRICING_STRATEGY.md; do
+            test -f "$f" || (echo "Missing required doc: $f" && exit 1)
+          done
+
+  # Заглушки для будущих job-ов — будут включаться по мере появления кода:
+  #
+  # backend:
+  #   uses: ./.github/workflows/backend.yml
+  #
+  # mini-app:
+  #   uses: ./.github/workflows/mini-app.yml
+  #
+  # admin-dashboard:
+  #   uses: ./.github/workflows/admin.yml
