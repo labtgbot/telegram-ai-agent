@@ -71,6 +71,10 @@ from app.services.payment_packages import (
     PaymentPackage,
     get_package,
 )
+from app.services.pricing import (
+    apply_pricing_to_package,
+    load_pricing_config,
+)
 from app.services.token_service import TokenService, UserNotFoundError
 
 logger = get_logger(__name__)
@@ -236,9 +240,15 @@ class PaymentService:
         the pre-checkout and successful-payment webhooks can correlate the
         purchase back to the user.
         """
-        package = get_package(package_code)
-        if package is None:
+        base_package = get_package(package_code)
+        if base_package is None:
             raise PackageNotFoundError(f"unknown package: {package_code!r}")
+
+        # Apply admin overrides → the pending row stores the *effective*
+        # price the user agreed to, so a later admin tweak does not
+        # invalidate an in-flight invoice.
+        pricing_config = await load_pricing_config(self.session)
+        package = apply_pricing_to_package(base_package, pricing_config)
 
         user = await self._get_user(user_id)
         payload = _generate_payload(package.code, user.id)
@@ -323,13 +333,23 @@ class PaymentService:
             raise PackageNotFoundError(
                 f"pre_checkout: unknown package in payload {payload!r}"
             )
-        if int(total_amount) != int(package.stars):
-            raise InvoicePayloadInvalidError(
-                f"pre_checkout: stars mismatch "
-                f"(payload={package.stars}, telegram={total_amount})"
-            )
 
         pending = await self._find_pending_invoice(payload)
+        # Validate against the price the user actually agreed to:
+        # the pending invoice holds the effective (admin-overridden) price.
+        # Subscription renewals have no pending row → fall back to the
+        # locked static price, which is exactly what Telegram bills.
+        expected_stars = (
+            int(pending.stars_amount or 0)
+            if pending is not None and pending.stars_amount is not None
+            else int(package.stars)
+        )
+        if int(total_amount) != expected_stars:
+            raise InvoicePayloadInvalidError(
+                f"pre_checkout: stars mismatch "
+                f"(expected={expected_stars}, telegram={total_amount})"
+            )
+
         if pending is None and not package.is_subscription:
             # Subscriptions can renew without a pending invoice (Telegram
             # bills automatically) — those flow straight to the success
@@ -388,11 +408,6 @@ class PaymentService:
             raise PackageNotFoundError(
                 f"successful_payment: unknown package in payload {payload!r}"
             )
-        if int(total_amount) != int(package.stars):
-            raise InvoicePayloadInvalidError(
-                f"successful_payment: stars mismatch "
-                f"(payload={package.stars}, telegram={total_amount})"
-            )
 
         try:
             user_id = int(parts["u"])
@@ -403,12 +418,29 @@ class PaymentService:
         charge_marker = f"{CHARGE_PREFIX}{telegram_payment_charge_id}"
 
         pending = await self._find_pending_invoice(payload)
+        # Validate the inbound amount against the pending row (which
+        # captured the admin-overridden price at invoice time), or the
+        # static package price for subscription renewals.
+        expected_stars = (
+            int(pending.stars_amount or 0)
+            if pending is not None and pending.stars_amount is not None
+            else int(package.stars)
+        )
+        if int(total_amount) != expected_stars:
+            raise InvoicePayloadInvalidError(
+                f"successful_payment: stars mismatch "
+                f"(expected={expected_stars}, telegram={total_amount})"
+            )
+
         if pending is not None and not is_recurring:
-            # Upgrade the existing pending row in place.
+            # Upgrade the existing pending row in place — credit the
+            # tokens that were actually quoted in the invoice, not the
+            # current static catalogue value.
+            effective_tokens = int(pending.tokens_amount or package.tokens)
             user = await token_service._lock_user(pending.user_id)
-            user.token_balance = int(user.token_balance or 0) + package.tokens
+            user.token_balance = int(user.token_balance or 0) + effective_tokens
             user.total_tokens_purchased = (
-                int(user.total_tokens_purchased or 0) + package.tokens
+                int(user.total_tokens_purchased or 0) + effective_tokens
             )
             pending.payment_id = charge_marker
             pending.payment_status = "completed"
@@ -481,21 +513,23 @@ class PaymentService:
                 user.premium_expires_at = expires_at
             await self.session.flush()
 
+        tokens_credited = int(tx.tokens_amount or package.tokens)
+        stars_amount = int(tx.stars_amount or package.stars)
         logger.info(
             "payment.completed",
             user_id=user.id,
             charge_id=telegram_payment_charge_id,
             package=package.code,
-            stars=package.stars,
-            tokens=package.tokens,
+            stars=stars_amount,
+            tokens=tokens_credited,
             transaction_id=int(tx.id),
             recurring=is_recurring,
         )
         return PaymentResult(
             transaction_id=int(tx.id),
             user_id=int(user.id),
-            tokens_credited=int(package.tokens),
-            stars_amount=int(package.stars),
+            tokens_credited=tokens_credited,
+            stars_amount=stars_amount,
             package_code=package.code,
             new_balance=int(user.token_balance or 0),
             is_subscription=package.is_subscription,
