@@ -2,6 +2,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.admin_analytics import router as admin_analytics_router
+from app.api.v1.admin_broadcasts import router as admin_broadcasts_router
 from app.api.v1.admin_pricing import router as admin_pricing_router
 from app.api.v1.admin_users import router as admin_users_router
 from app.api.v1.auth import router as auth_router
@@ -21,5 +22,6 @@ router.include_router(generate_router)
 router.include_router(admin_users_router)
 router.include_router(admin_pricing_router)
 router.include_router(admin_analytics_router)
+router.include_router(admin_broadcasts_router)
 
 __all__ = ["router"]
