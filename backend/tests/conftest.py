@@ -27,6 +27,22 @@ from sqlalchemy.ext.asyncio import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def _reset_pricing_cache() -> None:
+    """Drop the in-process pricing cache before and after every test.
+
+    The cache (issue #36) is module-level and persists across tests in a
+    process. Without this reset, a default-config read in one test would
+    mask an admin-update flushed by the next test, since the second test
+    rolls back the SAVEPOINT but cannot un-cache the value.
+    """
+    from app.services.pricing import invalidate_pricing_cache
+
+    invalidate_pricing_cache()
+    yield
+    invalidate_pricing_cache()
+
+
 def _database_url() -> str | None:
     return os.getenv("DATABASE_URL") or os.getenv("TEST_DATABASE_URL")
 

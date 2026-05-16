@@ -15,13 +15,16 @@ Edge Cases``.
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
+from time import monotonic
 from typing import Any, Final
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.admin_audit_log import AdminAuditLog
 from app.models.admin_setting import AdminSetting
@@ -350,13 +353,33 @@ def default_pricing_config() -> PricingConfig:
 # ----------------------------------------------------------------- public API
 
 
-async def load_pricing_config(session: AsyncSession) -> PricingConfig:
-    """Read the current pricing config from ``admin_settings``.
+# In-process TTL cache for the pricing config (issue #36).
+#
+# Every ``create_invoice`` call reads this row, and on a busy worker that
+# turns into hundreds of identical SELECTs per second.  The config rarely
+# changes (admin clicks "save" once a day at most) so a per-worker
+# in-memory cache with a short TTL is the right shape: zero cross-pod
+# coordination, microsecond reads, propagation delay bounded by the TTL.
+#
+# ``update_pricing_config`` calls :func:`invalidate_pricing_cache` to drop
+# the entry on the worker that handled the admin request — other workers
+# still see the change within :attr:`Settings.pricing_cache_ttl_seconds`
+# (default 60s), which matches the acceptance criterion in issue #36.
+_pricing_cache_lock = asyncio.Lock()
+_pricing_cache: tuple[float, PricingConfig] | None = None
 
-    Tolerant of any DB-layer hiccup or schema drift — falls back to the
-    in-code defaults so the payment flow can never be broken by a bad
-    admin override.
-    """
+
+def _pricing_cache_ttl() -> float:
+    return max(float(get_settings().pricing_cache_ttl_seconds), 0.0)
+
+
+def invalidate_pricing_cache() -> None:
+    """Drop the cached pricing config so the next read hits the DB."""
+    global _pricing_cache
+    _pricing_cache = None
+
+
+async def _read_pricing_from_db(session: AsyncSession) -> PricingConfig:
     try:
         row = (
             await session.execute(
@@ -371,6 +394,42 @@ async def load_pricing_config(session: AsyncSession) -> PricingConfig:
     if row is None:
         return default_pricing_config()
     return _parse_pricing_value(row.setting_value)
+
+
+async def load_pricing_config(session: AsyncSession) -> PricingConfig:
+    """Read the current pricing config from ``admin_settings``.
+
+    Tolerant of any DB-layer hiccup or schema drift — falls back to the
+    in-code defaults so the payment flow can never be broken by a bad
+    admin override.
+
+    Backed by an in-process TTL cache (default 60s, see
+    :attr:`Settings.pricing_cache_ttl_seconds`).  The cache is invalidated
+    explicitly by :func:`update_pricing_config` on the worker that
+    processed the change; cross-worker propagation is bounded by the TTL.
+    Setting ``pricing_cache_ttl_seconds`` to ``0`` disables the cache —
+    useful for the tests that exercise the parse paths directly.
+    """
+    global _pricing_cache
+    ttl = _pricing_cache_ttl()
+    now = monotonic()
+    snapshot = _pricing_cache
+    if ttl > 0 and snapshot is not None and snapshot[0] > now:
+        return snapshot[1]
+
+    async with _pricing_cache_lock:
+        # Recheck under the lock so a thundering herd collapses into one DB
+        # read; the second-pass snapshot reflects whichever coroutine got
+        # here first.
+        snapshot = _pricing_cache
+        if ttl > 0 and snapshot is not None and snapshot[0] > monotonic():
+            return snapshot[1]
+        config = await _read_pricing_from_db(session)
+        if ttl > 0:
+            _pricing_cache = (monotonic() + ttl, config)
+        else:
+            _pricing_cache = None
+        return config
 
 
 def effective_stars_for(
@@ -582,6 +641,10 @@ async def update_pricing_config(
     session.add(log)
     await session.flush()
 
+    # Drop the in-process cache so this worker serves the new config
+    # immediately; other workers reconcile within the TTL.
+    invalidate_pricing_cache()
+
     logger.info(
         "pricing.updated",
         admin_id=admin.id,
@@ -620,6 +683,7 @@ __all__ = [
     "default_pricing_config",
     "effective_stars_for",
     "effective_tokens_for",
+    "invalidate_pricing_cache",
     "load_pricing_config",
     "update_pricing_config",
 ]
