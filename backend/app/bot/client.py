@@ -164,3 +164,97 @@ class TelegramClient:
             scope=scope,
             language_code=language_code,
         )
+
+    # ---------------------------------------------------------------- payments
+
+    async def send_invoice(
+        self,
+        chat_id: int,
+        *,
+        title: str,
+        description: str,
+        payload: str,
+        currency: str,
+        prices: list[dict[str, Any]],
+        provider_token: str = "",
+        start_parameter: str | None = None,
+        photo_url: str | None = None,
+        protect_content: bool | None = None,
+        subscription_period: int | None = None,
+    ) -> Any:
+        """Send an invoice message to ``chat_id``.
+
+        Stars invoices set ``currency='XTR'`` and ``provider_token=''``.
+        ``prices`` is a list of LabeledPrice dicts: ``[{"label": "...",
+        "amount": stars_count}]``.
+        """
+        return await self.call(
+            "sendInvoice",
+            chat_id=chat_id,
+            title=title,
+            description=description,
+            payload=payload,
+            provider_token=provider_token,
+            currency=currency,
+            prices=prices,
+            start_parameter=start_parameter,
+            photo_url=photo_url,
+            protect_content=protect_content,
+            subscription_period=subscription_period,
+        )
+
+    async def create_invoice_link(
+        self,
+        *,
+        title: str,
+        description: str,
+        payload: str,
+        currency: str,
+        prices: list[dict[str, Any]],
+        provider_token: str = "",
+        photo_url: str | None = None,
+        subscription_period: int | None = None,
+    ) -> str:
+        """Create a Telegram invoice link (``t.me/$...``) for ``payload``.
+
+        Used by ``POST /api/v1/payment/create-invoice`` because the
+        endpoint must return something the Mini App can open — a chat-id
+        is not available there.  Returns the URL string.
+        """
+        result = await self.call(
+            "createInvoiceLink",
+            title=title,
+            description=description,
+            payload=payload,
+            provider_token=provider_token,
+            currency=currency,
+            prices=prices,
+            photo_url=photo_url,
+            subscription_period=subscription_period,
+        )
+        if not isinstance(result, str):
+            raise TelegramApiError(
+                "createInvoiceLink",
+                f"unexpected result type: {type(result).__name__}",
+            )
+        return result
+
+    async def answer_pre_checkout_query(
+        self,
+        pre_checkout_query_id: str,
+        *,
+        ok: bool,
+        error_message: str | None = None,
+    ) -> Any:
+        """Confirm or reject a pre-checkout query.
+
+        Telegram requires this to be sent within 10 seconds; the
+        webhook handler must therefore avoid heavy work before calling
+        it.
+        """
+        return await self.call(
+            "answerPreCheckoutQuery",
+            pre_checkout_query_id=pre_checkout_query_id,
+            ok=ok,
+            error_message=error_message if not ok else None,
+        )

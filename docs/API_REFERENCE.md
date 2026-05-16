@@ -34,27 +34,61 @@ Base URL: `/api/v1`.
 
 ## Payment Endpoints
 
+Implemented in Phase 2 (`backend/app/api/v1/payment.py`). Both endpoints require `X-Telegram-Init-Data`; the caller is identified by the signed payload, so no `user_id` is taken from the request body.
+
 ### POST /payment/create-invoice
+
+Request:
 ```json
-{ "package": "premium", "user_id": 12345 }
+{ "package": "premium" }
 ```
-Response:
+
+Response (`200`):
 ```json
 {
-  "invoice_id": "inv_123456",
+  "invoice_id": "9f3c…b1",
   "stars_amount": 750,
   "tokens_amount": 2000,
-  "telegram_invoice_link": "https://t.me/invoice/..."
+  "telegram_invoice_link": "https://t.me/$XXXX",
+  "transaction_id": 4711,
+  "is_subscription": false
 }
 ```
 
-### POST /payment/webhook
-Telegram `successful_payment` payload.
+| HTTP | `detail` | Trigger |
+|------|----------|---------|
+| 401  | `invalid_init_data` | Missing/forged init-data header |
+| 404  | `package_not_found` | Unknown package code |
+| 422  | Pydantic validation | Blank/oversized `package` |
+| 502  | `telegram_api_error` | `createInvoiceLink` upstream failure |
+
+The created `transactions` row starts at `status="pending"` with `payment_id="invoice:<invoice_id>"`; it is flipped to `completed` only after the `successful_payment` webhook lands.
+
+### Telegram Bot webhook — `pre_checkout_query` / `successful_payment`
+
+Posted to the existing `POST /bot/webhook/{secret}` endpoint by Telegram. The dispatcher (`backend/app/bot/dispatcher.py`) routes them to:
+
+* `handle_pre_checkout_query` — validates payload + replies via `answerPreCheckoutQuery` (ok=True/False).
+* `handle_successful_payment` — credits tokens via `PaymentService.finalize_successful_payment`, upgrades the pending transaction to `completed`, and (for Pro) extends `subscriptions.expires_at`. Duplicate webhooks with the same `telegram_payment_charge_id` are silently ignored.
 
 ### GET /payment/status/{invoice_id}
+
+Response (`200`):
 ```json
-{ "status": "completed", "tokens_credited": 2000, "transaction_id": "txn_789" }
+{
+  "invoice_id": "9f3c…b1",
+  "status": "completed",
+  "package": "premium",
+  "tokens_credited": 2000,
+  "stars_amount": 750,
+  "transaction_id": 4711,
+  "created_at": "2026-05-16T09:14:32Z",
+  "completed_at": "2026-05-16T09:14:55Z",
+  "telegram_payment_charge_id": "abcd…"
+}
 ```
+
+`status ∈ {pending, completed, failed}`. `tokens_credited` is `0` while the invoice is still pending. Returns `404 invoice_not_found` if the invoice is unknown or belongs to a different user.
 
 ## AI Generation Endpoints
 
