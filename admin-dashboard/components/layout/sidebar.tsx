@@ -12,6 +12,8 @@ const NAV: Array<{ href: string; label: string }> = [
   { href: "/pricing", label: "Pricing" },
   { href: "/analytics", label: "Analytics" },
   { href: "/broadcast", label: "Broadcast" },
+  { href: "/content", label: "Content" },
+  { href: "/system", label: "System" },
   { href: "/settings", label: "Settings" },
 ];
 
