@@ -18,7 +18,9 @@ jobs:
           for f in README.md CONTRIBUTING.md SECURITY.md \
                    docs/ARCHITECTURE.md docs/ROADMAP.md \
                    docs/TOKEN_ECONOMY.md docs/DATABASE_SCHEMA.md docs/API_REFERENCE.md \
-                   docs/ADMIN_CRM_GUIDE.md docs/SECURITY.md docs/DEPLOYMENT.md \
+                   docs/ADMIN_CRM_GUIDE.md docs/ADMIN_GUIDE.md docs/USER_GUIDE.md \
+                   docs/CHANGELOG.md \
+                   docs/SECURITY.md docs/DEPLOYMENT.md \
                    docs/PRICING_STRATEGY.md \
                    docs/security/threat-model.md docs/security/owasp-top10.md \
                    docs/security/pentest-scope.md docs/security/audit-report.md; do
