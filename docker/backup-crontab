@@ -1,0 +1,9 @@
+# Supercronic crontab consumed by the backup-supervisor container.
+# Times are UTC (the image runs with TZ=UTC unless overridden).
+#
+# columns: minute hour day month dow command
+0 2 * * *   /opt/tgai/backup/postgres-backup.sh
+30 2 * * *  /opt/tgai/backup/redis-backup.sh
+0 3 * * *   /opt/tgai/backup/media-sync.sh
+0 4 * * *   /opt/tgai/backup/prune-backups.sh
+0 6 1 1,4,7,10 *  /opt/tgai/backup/verify-backup.sh
