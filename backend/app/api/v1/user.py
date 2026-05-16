@@ -38,6 +38,7 @@ from app.services.account_deletion import (
     get_deletion_status,
     request_account_deletion,
 )
+from app.services.balance_cache import get_default_balance_cache
 from app.services.daily_bonus import (
     AlreadyClaimedError,
     DailyBonusDisabledError,
@@ -161,7 +162,7 @@ async def get_balance(
     redis: RedisDep,
     user: Annotated[User, Depends(get_current_user_from_init_data)],
 ) -> BalanceResponse:
-    service = TokenService(session)
+    service = TokenService(session, get_default_balance_cache())
     try:
         balance = await service.get_balance(user.id)
     except UserNotFoundError:

@@ -35,6 +35,7 @@ from typing import Any, Final
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.services.balance_cache import get_default_balance_cache
 from app.services.composio import (
     ComposioClient,
     ComposioError,
@@ -175,7 +176,7 @@ class DocumentAnalysisService:
     ) -> None:
         self.session = session
         self.composio = composio
-        self._tokens = TokenService(session)
+        self._tokens = TokenService(session, get_default_balance_cache())
 
     async def analyze(
         self,

@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.chat_history import ChatMessage, ChatThread
+from app.services.balance_cache import get_default_balance_cache
 from app.services.composio import (
     ComposioClient,
     ComposioError,
@@ -585,7 +586,7 @@ class TextGenerationService:
         self.composio = composio
         self.history = history
         self.summariser = summariser or HeuristicSummaryStrategy()
-        self._tokens = TokenService(session)
+        self._tokens = TokenService(session, get_default_balance_cache())
         self._stream_chunk_size = int(stream_chunk_size)
 
     # ------------------------------------------------------------------ api

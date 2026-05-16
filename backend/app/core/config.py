@@ -52,6 +52,55 @@ class Settings(BaseSettings):
         description="Per-dependency timeout (seconds) for /health checks.",
     )
 
+    # ---------------------------------------------------------- DB pool tuning
+    # See docs/PERFORMANCE.md "PostgreSQL connection pool" for sizing
+    # guidance. Values target a single backend pod; multiply by the replica
+    # count to get total open connections.
+    db_pool_size: int = Field(
+        default=20,
+        description=(
+            "Number of persistent connections kept open per worker. "
+            "Total pool capacity is db_pool_size + db_max_overflow."
+        ),
+    )
+    db_max_overflow: int = Field(
+        default=10,
+        description="Extra burst connections allowed above db_pool_size.",
+    )
+    db_pool_timeout: float = Field(
+        default=10.0,
+        description="Seconds a checkout waits for a free connection before raising.",
+    )
+    db_pool_recycle: int = Field(
+        default=1800,
+        description=(
+            "Seconds before a pooled connection is recycled. Keeps the pool "
+            "ahead of pgbouncer / cloud-provider idle-timeouts."
+        ),
+    )
+    db_statement_cache_size: int = Field(
+        default=1024,
+        description="asyncpg per-connection statement cache size.",
+    )
+
+    # ----------------------------------------------------------- cache tuning
+    balance_cache_ttl_seconds: int = Field(
+        default=300,
+        description=(
+            "Soft TTL for the Redis-cached user balance. The cache is "
+            "write-through on every TokenService mutation, so this TTL only "
+            "acts as a safety net against drift."
+        ),
+    )
+    pricing_cache_ttl_seconds: int = Field(
+        default=60,
+        description=(
+            "TTL for the in-process pricing config cache. Issue #36 sets the "
+            "budget at 60 seconds so admin price changes propagate quickly "
+            "while still absorbing the hottest read path."
+        ),
+    )
+
     telegram_bot_token: str = Field(
         default="",
         description="Telegram bot token; used for WebApp initData HMAC + Bot API calls.",
