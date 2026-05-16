@@ -10,6 +10,7 @@ from app.models.subscription import Subscription
 from app.models.token_usage_log import TokenUsageLog
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.models.video_job import VideoJob
 
 __all__ = [
     "AdminSetting",
@@ -19,4 +20,5 @@ __all__ = [
     "TokenUsageLog",
     "Transaction",
     "User",
+    "VideoJob",
 ]
