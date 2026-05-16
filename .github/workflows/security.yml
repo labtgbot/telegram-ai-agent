@@ -52,12 +52,15 @@ jobs:
 
       - name: Run pip-audit
         working-directory: backend
-        # `--skip-editable` excludes the locally-installed backend package
-        # (`telegram-ai-agent-backend`) from being looked up on PyPI — only
-        # its declared third-party dependencies are audited.
+        # `pip-audit` cannot resolve the locally-installed editable
+        # package (`telegram-ai-agent-backend`) on PyPI and aborts even
+        # with `--skip-editable` on pip-audit 2.10. We sidestep that by
+        # feeding it the list of resolved third-party deps directly via
+        # `pip freeze --exclude-editable`.
         run: |
+          pip freeze --exclude-editable > /tmp/resolved-requirements.txt
           pip-audit --strict --progress-spinner off \
-            --skip-editable \
+            --requirement /tmp/resolved-requirements.txt \
             --format json --output ../pip-audit.json
       - name: Upload pip-audit report
         if: always()
@@ -138,6 +141,11 @@ jobs:
 
       - name: Upload Bandit SARIF
         if: always()
+        # GitHub Code Scanning is only enabled on repos with GHAS. When it
+        # is off, this step 403s with "Resource not accessible by
+        # integration" — we tolerate that here because the SARIF file is
+        # still preserved via `actions/upload-artifact` below.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: bandit.sarif
@@ -189,6 +197,9 @@ jobs:
 
       - name: Upload Semgrep SARIF
         if: always()
+        # See "Upload Bandit SARIF" — tolerate Code-Scanning-disabled
+        # repos; the artifact upload below keeps the SARIF reachable.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
@@ -239,10 +250,17 @@ jobs:
           severity: HIGH,CRITICAL
           format: sarif
           output: trivy-fs.sarif
+          # `exit-code: 1` keeps the CI gate strict — any NEW HIGH/CRITICAL
+          # that lands outside the documented exceptions (see
+          # `.trivyignore` and audit-report.md § F-006/F-007) blocks merge.
           exit-code: "1"
+          trivyignores: .trivyignore
 
       - name: Upload Trivy fs SARIF
         if: always()
+        # See "Upload Bandit SARIF" — tolerate Code-Scanning-disabled
+        # repos; the artifact upload below keeps the SARIF reachable.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-fs.sarif
@@ -286,10 +304,17 @@ jobs:
           severity: HIGH,CRITICAL
           format: sarif
           output: trivy-image-backend.sarif
+          # Same gate rationale as the fs scan above: documented
+          # exceptions live in `.trivyignore` (see audit-report.md
+          # § F-008); new HIGH/CRITICAL findings still fail CI.
           exit-code: "1"
+          trivyignores: .trivyignore
 
       - name: Upload Trivy backend SARIF
         if: always()
+        # See "Upload Bandit SARIF" — tolerate Code-Scanning-disabled
+        # repos; the artifact upload below keeps the SARIF reachable.
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-image-backend.sarif

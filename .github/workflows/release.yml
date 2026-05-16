@@ -35,11 +35,24 @@ jobs:
 
       - name: Resolve release tag
         id: resolve
+        # Inputs from `workflow_dispatch` are pushed into the shell via
+        # environment variables (never inline `${{ … }}` in a `run:` body)
+        # to prevent shell injection — see
+        # https://docs.github.com/actions/security-guides/security-hardening-for-github-actions#using-an-intermediate-environment-variable
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
           else
             TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          # Reject anything that isn't a SemVer-shaped tag — defence in
+          # depth in case INPUT_TAG ever carries shell metacharacters.
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error title=Invalid tag::'$TAG' is not a valid SemVer tag (vMAJOR.MINOR.PATCH[-pre])"
+            exit 1
           fi
           VERSION="${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
