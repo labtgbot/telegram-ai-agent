@@ -178,8 +178,9 @@ def build_app(monkeypatch, fake_settings, stub_user, usage_logs):
 
     # Patch the TokenService to a stub that pulls from the in-memory store.
     class _FakeService:
-        def __init__(self, session):
+        def __init__(self, session, balance_cache=None):
             self.session = session
+            self.balance_cache = balance_cache
 
         async def get_balance(self, user_id: int) -> int:
             for u in store.values():

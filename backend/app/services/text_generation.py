@@ -46,6 +46,7 @@ from app.services.composio import (
     ToolResult,
     log_invocation,
 )
+from app.services.balance_cache import get_default_balance_cache
 from app.services.token_service import (
     InsufficientTokensError,
     TokenService,
@@ -585,7 +586,7 @@ class TextGenerationService:
         self.composio = composio
         self.history = history
         self.summariser = summariser or HeuristicSummaryStrategy()
-        self._tokens = TokenService(session)
+        self._tokens = TokenService(session, get_default_balance_cache())
         self._stream_chunk_size = int(stream_chunk_size)
 
     # ------------------------------------------------------------------ api

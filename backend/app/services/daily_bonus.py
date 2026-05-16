@@ -59,6 +59,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.admin_setting import AdminSetting
 from app.models.daily_bonus_claim import DailyBonusClaim
+from app.services.balance_cache import get_default_balance_cache
 from app.services.token_service import TokenService, UserNotFoundError
 
 logger = get_logger(__name__)
@@ -328,7 +329,7 @@ class DailyBonusService:
                 "daily bonus amount resolved to 0 — check admin settings"
             )
 
-        token_service = TokenService(self.session)
+        token_service = TokenService(self.session, get_default_balance_cache())
         try:
             credit = await token_service.add(
                 user_id=user_id,

@@ -44,6 +44,7 @@ from app.services.daily_bonus import (
     DailyBonusService,
 )
 from app.services.data_export import build_user_data_export
+from app.services.balance_cache import get_default_balance_cache
 from app.services.payments import REFERRAL_BONUS_PACKAGE
 from app.services.token_service import TokenService, UserNotFoundError
 
@@ -161,7 +162,7 @@ async def get_balance(
     redis: RedisDep,
     user: Annotated[User, Depends(get_current_user_from_init_data)],
 ) -> BalanceResponse:
-    service = TokenService(session)
+    service = TokenService(session, get_default_balance_cache())
     try:
         balance = await service.get_balance(user.id)
     except UserNotFoundError:

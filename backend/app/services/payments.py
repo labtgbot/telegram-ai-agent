@@ -76,6 +76,7 @@ from app.services.pricing import (
     apply_pricing_to_package,
     load_pricing_config,
 )
+from app.services.balance_cache import get_default_balance_cache
 from app.services.token_service import TokenService, UserNotFoundError
 
 logger = get_logger(__name__)
@@ -419,7 +420,7 @@ class PaymentService:
         except (KeyError, ValueError) as exc:
             raise InvoicePayloadInvalidError("payload user id invalid") from exc
 
-        token_service = TokenService(self.session)
+        token_service = TokenService(self.session, get_default_balance_cache())
         charge_marker = f"{CHARGE_PREFIX}{telegram_payment_charge_id}"
 
         pending = await self._find_pending_invoice(payload)
@@ -668,7 +669,7 @@ class PaymentService:
         if referrer is None or referrer.is_banned:
             return
 
-        token_service = TokenService(self.session)
+        token_service = TokenService(self.session, get_default_balance_cache())
         # Wrap the credit in a SAVEPOINT so a race on the partial unique
         # index over ``payment_id`` rolls back only the duplicate insert —
         # not the surrounding payment transaction.
@@ -844,7 +845,7 @@ async def process_subscription_renewals(
         stmt = stmt.limit(int(limit))
     subs = list((await session.execute(stmt)).scalars().all())
 
-    token_service = TokenService(session)
+    token_service = TokenService(session, get_default_balance_cache())
     results: list[PaymentResult] = []
     for sub in subs:
         package = _package_for_plan(sub.plan_code)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.services.balance_cache import BalanceCache
 from app.services.token_service import (
     CREDIT_TYPES,
     REFUNDABLE_TYPES,
@@ -18,6 +19,7 @@ from app.services.token_service import (
     TokenOperationResult,
     TokenService,
     UsageHistoryPage,
+    UserNotFoundError,
     _coerce_amount,
 )
 
@@ -174,3 +176,112 @@ async def test_manual_bonus_requires_reason() -> None:
         await svc.manual_bonus(user_id=1, amount=10, reason="")
     with pytest.raises(InvalidAmountError):
         await svc.manual_bonus(user_id=1, amount=10, reason="   ")
+
+
+# ---------------------------------------------------- get_balance + cache wiring
+
+
+class _StubRedis:
+    """Async ``redis.asyncio``-shaped stub used only for cache tests."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.get_calls: list[str] = []
+
+    async def get(self, name: str):
+        self.get_calls.append(name)
+        return self.store.get(name)
+
+    async def set(self, name: str, value, ex=None) -> bool:  # noqa: ANN001
+        self.store[name] = str(value)
+        return True
+
+    async def delete(self, *names: str) -> int:
+        removed = 0
+        for n in names:
+            if n in self.store:
+                del self.store[n]
+                removed += 1
+        return removed
+
+
+class _SessionRecorder:
+    """Pretends to be an :class:`AsyncSession` for ``get_balance`` reads.
+
+    Returns a one-row scalar wrapped in a tiny shim so we can assert how
+    many times ``session.execute`` is actually called.
+    """
+
+    def __init__(self, balance: int | None) -> None:
+        self.balance = balance
+        self.execute_calls = 0
+
+    async def execute(self, _stmt):  # noqa: ANN001
+        self.execute_calls += 1
+        balance = self.balance
+
+        class _Result:
+            def scalar_one_or_none(self_inner) -> int | None:
+                return balance
+
+        return _Result()
+
+
+@pytest.mark.asyncio
+async def test_get_balance_returns_cached_value_without_db_hit() -> None:
+    redis = _StubRedis()
+    cache = BalanceCache(redis, ttl_seconds=60)
+    await cache.set(42, 250)
+
+    session = _SessionRecorder(balance=999)  # would-be DB value, must not be read
+    svc = TokenService(session, cache)  # type: ignore[arg-type]
+
+    assert await svc.get_balance(42) == 250
+    assert session.execute_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_get_balance_populates_cache_on_miss() -> None:
+    redis = _StubRedis()
+    cache = BalanceCache(redis, ttl_seconds=60)
+
+    session = _SessionRecorder(balance=125)
+    svc = TokenService(session, cache)  # type: ignore[arg-type]
+
+    assert await svc.get_balance(7) == 125
+    assert session.execute_calls == 1
+    # Hydrated — a subsequent read serves from cache.
+    assert await svc.get_balance(7) == 125
+    assert session.execute_calls == 1
+    assert await cache.get(7) == 125
+
+
+@pytest.mark.asyncio
+async def test_get_balance_falls_back_to_session_when_no_cache() -> None:
+    session = _SessionRecorder(balance=42)
+    svc = TokenService(session)  # type: ignore[arg-type]
+    assert await svc.get_balance(99) == 42
+    assert session.execute_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_get_balance_raises_when_user_missing_and_no_cache() -> None:
+    session = _SessionRecorder(balance=None)
+    svc = TokenService(session)  # type: ignore[arg-type]
+    with pytest.raises(UserNotFoundError):
+        await svc.get_balance(404)
+
+
+@pytest.mark.asyncio
+async def test_refresh_cache_swallows_redis_outage() -> None:
+    """A Redis failure must never break a billable spend."""
+
+    class _BrokenRedis(_StubRedis):
+        async def set(self, *_a, **_kw) -> bool:
+            raise RuntimeError("redis down")
+
+    cache = BalanceCache(_BrokenRedis(), ttl_seconds=60)
+    svc = TokenService(_SessionRecorder(balance=0), cache)  # type: ignore[arg-type]
+    # _refresh_cache is the codepath every write method calls post-flush;
+    # it must absorb backend errors silently.
+    await svc._refresh_cache(1, 500)

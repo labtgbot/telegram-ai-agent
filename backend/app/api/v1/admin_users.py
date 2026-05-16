@@ -46,6 +46,7 @@ from app.services.admin_users import (
     record_audit_event,
     unban_user,
 )
+from app.services.balance_cache import get_default_balance_cache
 from app.services.token_service import (
     InvalidAmountError,
     TokenService,
@@ -432,7 +433,7 @@ async def add_tokens_endpoint(
     session: SessionDep,
     admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
 ) -> AddTokensResponse:
-    service = TokenService(session)
+    service = TokenService(session, get_default_balance_cache())
     try:
         result = await service.manual_bonus(
             user_id=user_id,

@@ -382,7 +382,7 @@ def build_app(monkeypatch, admin_super, admin_analyst, target_user, fake_bot):
         return header + body
 
     class _FakeTokenService:
-        def __init__(self, _session):
+        def __init__(self, _session, balance_cache=None):
             pass
 
         async def manual_bonus(

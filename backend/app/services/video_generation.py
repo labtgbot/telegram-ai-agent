@@ -38,6 +38,7 @@ from app.services.composio import (
     ToolResult,
     log_invocation,
 )
+from app.services.balance_cache import get_default_balance_cache
 from app.services.token_service import (
     InsufficientTokensError,
     TokenService,
@@ -209,7 +210,7 @@ class VideoGenerationService:
     ) -> None:
         self.session = session
         self.composio = composio
-        self._tokens = TokenService(session)
+        self._tokens = TokenService(session, get_default_balance_cache())
 
     # ------------------------------------------------------------- create
 
