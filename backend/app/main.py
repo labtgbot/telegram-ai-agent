@@ -10,11 +10,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.responses import PlainTextResponse
 
 from app import __version__
 from app.api.v1 import router as v1_router
 from app.api.v1.bot import close_bot_client, get_bot_client
 from app.api.v1.generate import close_composio_client
+from app.api.v1.legal import load_legal_document
 from app.bot.commands import set_bot_commands
 from app.core.config import get_settings
 from app.core.database import get_engine
@@ -87,7 +89,25 @@ def create_app() -> FastAPI:
             "version": __version__,
             "docs": "/docs",
             "health": f"{settings.api_v1_prefix}/health",
+            "privacy": "/privacy",
+            "terms": "/terms",
         }
+
+    def _legal_text(slug: str) -> PlainTextResponse:
+        doc = load_legal_document(slug)
+        return PlainTextResponse(
+            content=doc.body, media_type="text/markdown; charset=utf-8"
+        )
+
+    @app.get("/privacy", include_in_schema=False)
+    async def privacy_policy() -> PlainTextResponse:
+        """Public Privacy Policy (Markdown). Referenced by the bot's /privacy command."""
+        return _legal_text("privacy")
+
+    @app.get("/terms", include_in_schema=False)
+    async def terms_of_service() -> PlainTextResponse:
+        """Public Terms of Service (Markdown). Referenced by the bot's /terms command."""
+        return _legal_text("terms")
 
     return app
 

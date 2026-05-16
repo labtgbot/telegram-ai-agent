@@ -33,6 +33,8 @@ BOT_COMMANDS: tuple[BotCommand, ...] = (
     BotCommand("video", "Сгенерировать видео по описанию"),
     BotCommand("profile", "Мой профиль"),
     BotCommand("referral", "Реферальная ссылка"),
+    BotCommand("privacy", "Политика конфиденциальности"),
+    BotCommand("terms", "Пользовательское соглашение"),
     BotCommand("help", "Справка по командам"),
 )
 
