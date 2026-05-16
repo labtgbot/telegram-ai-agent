@@ -18,7 +18,7 @@ The same documents are also exposed at the bare root (``/privacy``,
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Final
 
@@ -129,7 +129,7 @@ def load_legal_document(slug: str) -> LegalDocumentResponse:
         title=title,
         body=body,
         last_updated=_parse_last_updated(body),
-        fetched_at=datetime.now(timezone.utc),
+        fetched_at=datetime.now(UTC),
     )
 
 

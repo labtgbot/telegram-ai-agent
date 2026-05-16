@@ -5,6 +5,12 @@
 * ``GET /api/v1/user/referral`` — referral code, link and rewards summary.
 * ``GET /api/v1/user/daily-bonus`` — claim status + streak preview.
 * ``POST /api/v1/user/daily-bonus`` — credit today's bonus (idempotent per UTC day).
+* ``GET /api/v1/user/me/export`` — GDPR Art. 15/20 data export (JSON).
+* ``DELETE /api/v1/user/me`` — schedule GDPR Art. 17 anonymisation
+  (30-day grace period).
+* ``POST /api/v1/user/me/cancel-deletion`` — cancel a pending deletion.
+* ``GET /api/v1/user/me/deletion-status`` — status of the deletion grace
+  period (used by the Mini App banner).
 
 All endpoints require a valid ``X-Telegram-Init-Data`` header (handled by
 :func:`app.auth.dependencies.get_current_user_from_init_data`).
@@ -25,11 +31,19 @@ from app.core.logging import get_logger
 from app.core.redis import get_redis
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.services.account_deletion import (
+    DeletionAlreadyPendingError,
+    NoPendingDeletionError,
+    cancel_account_deletion,
+    get_deletion_status,
+    request_account_deletion,
+)
 from app.services.daily_bonus import (
     AlreadyClaimedError,
     DailyBonusDisabledError,
     DailyBonusService,
 )
+from app.services.data_export import build_user_data_export
 from app.services.payments import REFERRAL_BONUS_PACKAGE
 from app.services.token_service import TokenService, UserNotFoundError
 
@@ -292,3 +306,155 @@ async def claim_daily_bonus(
         claim_date=result.claim_date,
         next_available_at=result.next_available_at,
     )
+
+
+# ---------------------------------------------------------------- GDPR rights
+
+
+class DataExportResponse(BaseModel):
+    """Result of GDPR Art. 15 / Art. 20 user data export."""
+
+    schema_version: str
+    generated_at: datetime
+    user: dict[str, Any]
+    transactions: list[dict[str, Any]]
+    subscriptions: list[dict[str, Any]]
+    chat_threads: list[dict[str, Any]]
+    chat_messages: list[dict[str, Any]]
+    daily_bonus_claims: list[dict[str, Any]]
+    referrals_summary: dict[str, int]
+    notes: list[str]
+
+
+class DeletionStatusResponse(BaseModel):
+    pending: bool
+    request_id: int | None = None
+    requested_at: datetime | None = None
+    scheduled_for: datetime | None = None
+
+
+class DeleteAccountResponse(BaseModel):
+    request_id: int
+    status: str
+    requested_at: datetime
+    scheduled_for: datetime
+    detail: str = "deletion_scheduled"
+
+
+class CancelDeletionResponse(BaseModel):
+    cancelled: bool
+    request_id: int | None = None
+
+
+@router.get(
+    "/me/export",
+    response_model=DataExportResponse,
+    summary="GDPR Art. 15 / Art. 20 — download your data (JSON)",
+)
+async def export_my_data(
+    session: SessionDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> DataExportResponse:
+    export = await build_user_data_export(session, user=user)
+    payload = export.to_json()
+    logger.info(
+        "user.data_export",
+        user_id=user.id,
+        transactions=len(export.transactions),
+        chat_messages=len(export.chat_messages),
+        notes=len(export.notes),
+    )
+    return DataExportResponse(**payload)
+
+
+@router.get(
+    "/me/deletion-status",
+    response_model=DeletionStatusResponse,
+    summary="Current account-deletion grace-period status",
+)
+async def my_deletion_status(
+    session: SessionDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> DeletionStatusResponse:
+    snapshot = await get_deletion_status(session, user.id)
+    return DeletionStatusResponse(
+        pending=snapshot.pending,
+        request_id=snapshot.request_id,
+        requested_at=snapshot.requested_at,
+        scheduled_for=snapshot.scheduled_for,
+    )
+
+
+@router.delete(
+    "/me",
+    response_model=DeleteAccountResponse,
+    summary="GDPR Art. 17 — schedule account anonymisation (30-day grace)",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def delete_my_account(
+    session: SessionDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> DeleteAccountResponse:
+    try:
+        result = await request_account_deletion(
+            session,
+            user=user,
+            requested_via="mini_app",
+        )
+    except DeletionAlreadyPendingError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "deletion_already_pending",
+                "request_id": exc.request.id,
+                "scheduled_for": exc.request.scheduled_for.isoformat(),
+            },
+        ) from exc
+
+    try:
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        await session.rollback()
+        logger.exception("user.delete_me.commit_failed", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="commit_failed",
+        ) from exc
+
+    return DeleteAccountResponse(
+        request_id=result.request_id,
+        status=result.status,
+        requested_at=result.requested_at,
+        scheduled_for=result.scheduled_for,
+    )
+
+
+@router.post(
+    "/me/cancel-deletion",
+    response_model=CancelDeletionResponse,
+    summary="Cancel a pending account-deletion request",
+)
+async def cancel_my_account_deletion(
+    session: SessionDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> CancelDeletionResponse:
+    try:
+        snapshot = await cancel_account_deletion(session, user=user)
+    except NoPendingDeletionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="no_pending_deletion",
+        ) from exc
+
+    try:
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001
+        await session.rollback()
+        logger.exception("user.cancel_deletion.commit_failed", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="commit_failed",
+        ) from exc
+
+    return CancelDeletionResponse(cancelled=True, request_id=snapshot.request_id)
