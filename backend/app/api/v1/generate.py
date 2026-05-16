@@ -11,10 +11,17 @@
   response in a single JSON body.
 * ``POST /api/v1/generate/text/stream`` — same call but server-sends the
   response as SSE so the Mini-App can render a typewriter effect.
+* ``POST /api/v1/generate/search`` — web search via the Composio search
+  toolkit; returns structured results plus an optional summary.
+* ``POST /api/v1/generate/voice`` — voice message: STT for incoming audio,
+  optional TTS to synthesise a reply.
+* ``POST /api/v1/generate/document`` — document analysis (PDF/DOCX/TXT)
+  with text extraction, summary and optional Q&A.
 
 The endpoints require a valid ``X-Telegram-Init-Data`` header (Mini-App
-flow) and are rate-limited via the ``image`` / ``video`` / ``text``
-quota buckets defined in ``app.services.rate_limit_config``.
+flow) and are rate-limited via the ``image`` / ``video`` / ``text`` /
+``search`` / ``voice`` / ``document`` quota buckets defined in
+``app.services.rate_limit_config``.
 
 Token cost / quality tiers (mirrors ``ImageGenerationService``):
 
@@ -33,6 +40,12 @@ Text modes (mirrors ``TextGenerationService``):
 * ``basic``               →  1 token  → Gemini.
 * ``advanced``            →  5 tokens → Claude.
 * ``autonomous_agent``    → 10 tokens → GPT.
+
+Phase 2 service prices (issue #16):
+
+* ``search``    →  3 tokens (flat)
+* ``voice``     →  5 tokens (flat; STT and STT+TTS both)
+* ``document``  → 20 tokens (flat; 10 MB free / 50 MB premium upload cap)
 """
 from __future__ import annotations
 
@@ -54,6 +67,21 @@ from app.models.user import User
 from app.services.composio import (
     ComposioClient,
     build_client,
+)
+from app.services.document_analysis import (
+    DOCUMENT_COST,
+    MAX_DOCUMENT_URL_LENGTH,
+    MAX_FILE_BYTES_FREE,
+    MAX_FILE_BYTES_PREMIUM,
+    MAX_FILENAME_LENGTH,
+    MAX_QUESTION_LENGTH,
+    SUPPORTED_FORMATS,
+    DocumentAnalysisService,
+    DocumentProviderError,
+    DocumentTooLargeError,
+    InvalidDocumentError,
+    InvalidDocumentFormatError,
+    InvalidQuestionError,
 )
 from app.services.image_generation import (
     DEFAULT_ASPECT_RATIO,
@@ -113,6 +141,31 @@ from app.services.video_generation import (
 )
 from app.services.video_generation import (
     InvalidPromptError as VideoInvalidPromptError,
+)
+from app.services.voice_processing import (
+    MAX_AUDIO_URL_LENGTH,
+    MAX_LANGUAGE_LENGTH,
+    MAX_VOICE_LENGTH,
+    VOICE_COST,
+    InvalidAudioError,
+    InvalidVoicePromptError,
+    VoiceProcessingService,
+    VoiceProviderError,
+)
+from app.services.voice_processing import (
+    MAX_PROMPT_LENGTH as MAX_VOICE_PROMPT_LENGTH,
+)
+from app.services.web_search import (
+    MAX_MAX_RESULTS,
+    MAX_QUERY_LENGTH,
+    MIN_MAX_RESULTS,
+    SEARCH_COST,
+    InvalidMaxResultsError,
+    SearchProviderError,
+    WebSearchService,
+)
+from app.services.web_search import (
+    InvalidQueryError as SearchInvalidQueryError,
 )
 
 router = APIRouter(prefix="/generate", tags=["generate"])
@@ -954,3 +1007,583 @@ async def generate_text_stream(
 def _sse_frame(payload: dict) -> bytes:
     """Encode ``payload`` as a single SSE ``data:`` frame."""
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+
+
+# --------------------------------------------------------------- search schemas
+
+
+class WebSearchRequest(BaseModel):
+    """Body for ``POST /api/v1/generate/search``."""
+
+    query: str = Field(..., min_length=1, max_length=MAX_QUERY_LENGTH)
+    max_results: int | None = Field(
+        default=None,
+        ge=MIN_MAX_RESULTS,
+        le=MAX_MAX_RESULTS,
+        description=(
+            f"Number of results to return ({MIN_MAX_RESULTS}..{MAX_MAX_RESULTS}); "
+            "defaults to 5 when omitted."
+        ),
+    )
+
+
+class SearchResultItem(BaseModel):
+    title: str
+    url: str
+    snippet: str | None = None
+    source: str | None = None
+
+
+class WebSearchResponse(BaseModel):
+    query: str
+    results: list[SearchResultItem]
+    summary: str | None = None
+    tokens_spent: int
+    new_balance: int
+    usage_log_id: int
+    transaction_id: int
+    request_id: str
+    composio_tool: str
+    mcp_server: str | None = None
+    processing_time_ms: int | None = None
+
+
+# --------------------------------------------------------------- search endpoint
+
+
+@router.post(
+    "/search",
+    response_model=WebSearchResponse,
+    summary="Run a web search via the Composio search toolkit (3 tokens)",
+    dependencies=[Depends(rate_limit(action="search"))],
+)
+async def generate_search(
+    body: WebSearchRequest,
+    session: SessionDep,
+    composio: ComposioClientDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> WebSearchResponse:
+    """Synchronous web search via the Composio search toolkit.
+
+    Failure modes:
+
+    * ``400 invalid_query`` / ``invalid_max_results``
+    * ``402 insufficient_tokens`` — balance below the search price
+    * ``404 user_not_found``
+    * ``502 search_provider_error`` — Composio call failed / no results
+    * ``500 commit_failed`` — DB error on commit
+    """
+    service = WebSearchService(session, composio)
+    request_id = uuid.uuid4().hex
+
+    try:
+        outcome = await service.search(
+            user_id=user.id,
+            query=body.query,
+            max_results=body.max_results,
+            request_id=request_id,
+        )
+    except SearchInvalidQueryError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_query", "message": str(exc)},
+        ) from exc
+    except InvalidMaxResultsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_max_results",
+                "message": str(exc),
+                "min": MIN_MAX_RESULTS,
+                "max": MAX_MAX_RESULTS,
+            },
+        ) from exc
+    except InsufficientTokensError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "insufficient_tokens",
+                "required": exc.required,
+                "available": exc.available,
+                "cost": SEARCH_COST,
+            },
+        ) from exc
+    except UserNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="user_not_found",
+        ) from exc
+    except SearchProviderError as exc:
+        await session.rollback()
+        logger.warning(
+            "generate.search.provider_error",
+            user_id=user.id,
+            request_id=request_id,
+            error=str(exc),
+            provider_error=exc.provider_error,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error": "search_provider_error",
+                "message": str(exc),
+                "provider_error": exc.provider_error,
+            },
+        ) from exc
+
+    try:
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001 — surface a clean 500
+        await session.rollback()
+        logger.exception(
+            "generate.search.commit_failed",
+            user_id=user.id,
+            request_id=request_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="commit_failed",
+        ) from exc
+
+    return WebSearchResponse(
+        query=outcome.query,
+        results=[
+            SearchResultItem(
+                title=r.title,
+                url=r.url,
+                snippet=r.snippet,
+                source=r.source,
+            )
+            for r in outcome.results
+        ],
+        summary=outcome.summary,
+        tokens_spent=outcome.tokens_spent,
+        new_balance=outcome.new_balance,
+        usage_log_id=outcome.usage_log_id,
+        transaction_id=outcome.transaction_id,
+        request_id=request_id,
+        composio_tool=outcome.composio_tool,
+        mcp_server=outcome.mcp_server,
+        processing_time_ms=outcome.processing_time_ms,
+    )
+
+
+# ---------------------------------------------------------------- voice schemas
+
+
+class VoiceProcessingRequest(BaseModel):
+    """Body for ``POST /api/v1/generate/voice``.
+
+    Either ``audio_url`` or ``audio_base64`` must be supplied. When
+    ``synthesize_reply`` is on the server runs an additional TTS pass for
+    ``reply_prompt`` (or the transcript itself if no prompt was given).
+    """
+
+    audio_url: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_AUDIO_URL_LENGTH,
+        description="Absolute http(s) URL to the voice file to transcribe.",
+    )
+    audio_base64: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Base64-encoded audio payload (≤25 MB after decoding).",
+    )
+    language: str | None = Field(
+        default=None,
+        max_length=MAX_LANGUAGE_LENGTH,
+        description="Optional BCP-47 language hint for the STT engine.",
+    )
+    duration_seconds: float | None = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "Optional client-side hint about the audio duration; the "
+            "service enforces an upper bound of 5 minutes."
+        ),
+    )
+    synthesize_reply: bool = Field(
+        default=False,
+        description=(
+            "When True the server also runs TTS and returns "
+            "``reply_audio_url``."
+        ),
+    )
+    reply_prompt: str | None = Field(
+        default=None,
+        max_length=MAX_VOICE_PROMPT_LENGTH,
+        description=(
+            "Optional text to synthesise instead of the transcript. "
+            "Requires synthesize_reply=True."
+        ),
+    )
+    voice: str | None = Field(
+        default=None,
+        max_length=MAX_VOICE_LENGTH,
+        description="Optional TTS voice identifier (provider-specific).",
+    )
+
+    @model_validator(mode="after")
+    def _require_audio_reference(self) -> VoiceProcessingRequest:
+        if not self.audio_url and not self.audio_base64:
+            # Surface the missing-input case as a 422 from Pydantic rather
+            # than letting it propagate as a 400 from the service layer.
+            raise ValueError("audio_url or audio_base64 is required")
+        return self
+
+
+class VoiceProcessingResponse(BaseModel):
+    transcript: str
+    language: str | None = None
+    reply_text: str | None = None
+    reply_audio_url: str | None = None
+    duration_seconds: float | None = None
+    tokens_spent: int
+    new_balance: int
+    usage_log_id: int
+    transaction_id: int
+    request_id: str
+    composio_tool: str
+    mcp_server: str | None = None
+    processing_time_ms: int | None = None
+
+
+# --------------------------------------------------------------- voice endpoint
+
+
+@router.post(
+    "/voice",
+    response_model=VoiceProcessingResponse,
+    summary="Transcribe a voice message (optionally synthesise reply, 5 tokens)",
+    dependencies=[Depends(rate_limit(action="voice"))],
+)
+async def generate_voice(
+    body: VoiceProcessingRequest,
+    session: SessionDep,
+    composio: ComposioClientDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> VoiceProcessingResponse:
+    """Synchronous voice processing via the Composio voice toolkit.
+
+    The flat 5-token cost covers STT plus an optional TTS pass when
+    ``synthesize_reply`` is set.
+
+    Failure modes:
+
+    * ``400 invalid_audio`` / ``invalid_reply_prompt``
+    * ``402 insufficient_tokens`` — balance below the voice price
+    * ``404 user_not_found``
+    * ``502 voice_provider_error`` — Composio call failed / no transcript
+    * ``500 commit_failed`` — DB error on commit
+    """
+    service = VoiceProcessingService(session, composio)
+    request_id = uuid.uuid4().hex
+
+    try:
+        outcome = await service.process(
+            user_id=user.id,
+            audio_url=body.audio_url,
+            audio_base64=body.audio_base64,
+            language=body.language,
+            synthesize_reply=body.synthesize_reply,
+            reply_prompt=body.reply_prompt,
+            voice=body.voice,
+            duration_seconds=body.duration_seconds,
+            request_id=request_id,
+        )
+    except InvalidAudioError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_audio", "message": str(exc)},
+        ) from exc
+    except InvalidVoicePromptError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_reply_prompt", "message": str(exc)},
+        ) from exc
+    except InsufficientTokensError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "insufficient_tokens",
+                "required": exc.required,
+                "available": exc.available,
+                "cost": VOICE_COST,
+            },
+        ) from exc
+    except UserNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="user_not_found",
+        ) from exc
+    except VoiceProviderError as exc:
+        await session.rollback()
+        logger.warning(
+            "generate.voice.provider_error",
+            user_id=user.id,
+            request_id=request_id,
+            error=str(exc),
+            provider_error=exc.provider_error,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error": "voice_provider_error",
+                "message": str(exc),
+                "provider_error": exc.provider_error,
+            },
+        ) from exc
+
+    try:
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001 — surface a clean 500
+        await session.rollback()
+        logger.exception(
+            "generate.voice.commit_failed",
+            user_id=user.id,
+            request_id=request_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="commit_failed",
+        ) from exc
+
+    return VoiceProcessingResponse(
+        transcript=outcome.transcript,
+        language=outcome.language,
+        reply_text=outcome.reply_text,
+        reply_audio_url=outcome.reply_audio_url,
+        duration_seconds=outcome.duration_seconds,
+        tokens_spent=outcome.tokens_spent,
+        new_balance=outcome.new_balance,
+        usage_log_id=outcome.usage_log_id,
+        transaction_id=outcome.transaction_id,
+        request_id=request_id,
+        composio_tool=outcome.composio_tool,
+        mcp_server=outcome.mcp_server,
+        processing_time_ms=outcome.processing_time_ms,
+    )
+
+
+# ------------------------------------------------------------ document schemas
+
+
+_DocumentFormat = Literal["pdf", "docx", "txt"]
+
+
+class DocumentAnalysisRequest(BaseModel):
+    """Body for ``POST /api/v1/generate/document``.
+
+    Either ``document_url`` or ``document_base64`` must be supplied. The
+    file format can be passed explicitly or inferred from ``filename`` /
+    the trailing extension of ``document_url``.
+    """
+
+    document_url: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_DOCUMENT_URL_LENGTH,
+        description="Absolute http(s) URL to the document to parse.",
+    )
+    document_base64: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Base64-encoded document payload (≤10 MB free / ≤50 MB premium)."
+        ),
+    )
+    format: _DocumentFormat | None = Field(
+        default=None,
+        description="Explicit document format; inferred from URL/filename when omitted.",
+    )
+    filename: str | None = Field(
+        default=None,
+        max_length=MAX_FILENAME_LENGTH,
+        description="Optional original filename — used for format inference.",
+    )
+    file_size_bytes: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "Optional client-supplied size used to enforce the per-tier cap "
+            "before the file is downloaded by the provider."
+        ),
+    )
+    question: str | None = Field(
+        default=None,
+        max_length=MAX_QUESTION_LENGTH,
+        description="Optional Q&A prompt run against the parsed document.",
+    )
+
+    @model_validator(mode="after")
+    def _require_document_reference(self) -> DocumentAnalysisRequest:
+        if not self.document_url and not self.document_base64:
+            raise ValueError("document_url or document_base64 is required")
+        return self
+
+
+class DocumentAnalysisResponse(BaseModel):
+    format: _DocumentFormat
+    text: str
+    summary: str | None = None
+    answer: str | None = None
+    question: str | None = None
+    page_count: int | None = None
+    char_count: int
+    file_size_bytes: int | None = None
+    tokens_spent: int
+    new_balance: int
+    usage_log_id: int
+    transaction_id: int
+    request_id: str
+    composio_tool: str
+    mcp_server: str | None = None
+    processing_time_ms: int | None = None
+
+
+# ----------------------------------------------------------- document endpoint
+
+
+@router.post(
+    "/document",
+    response_model=DocumentAnalysisResponse,
+    summary="Analyse a document (PDF/DOCX/TXT) and debit 20 tokens",
+    dependencies=[Depends(rate_limit(action="document"))],
+)
+async def generate_document(
+    body: DocumentAnalysisRequest,
+    session: SessionDep,
+    composio: ComposioClientDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> DocumentAnalysisResponse:
+    """Synchronous document analysis via the Composio document toolkit.
+
+    Premium users get a 50 MB upload cap; free users 10 MB. The flat
+    20-token cost covers extraction + summary, plus optional Q&A when
+    ``question`` is provided.
+
+    Failure modes:
+
+    * ``400 invalid_document`` / ``invalid_format`` / ``invalid_question``
+    * ``402 insufficient_tokens`` — balance below the document price
+    * ``404 user_not_found``
+    * ``413 document_too_large`` — payload over the per-tier cap
+    * ``502 document_provider_error`` — Composio call failed / empty result
+    * ``500 commit_failed`` — DB error on commit
+    """
+    service = DocumentAnalysisService(session, composio)
+    request_id = uuid.uuid4().hex
+
+    try:
+        outcome = await service.analyze(
+            user_id=user.id,
+            document_url=body.document_url,
+            document_base64=body.document_base64,
+            format=body.format,
+            filename=body.filename,
+            file_size_bytes=body.file_size_bytes,
+            question=body.question,
+            is_premium=user.is_premium,
+            request_id=request_id,
+        )
+    except InvalidDocumentFormatError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_format",
+                "message": str(exc),
+                "supported": sorted(SUPPORTED_FORMATS),
+            },
+        ) from exc
+    except InvalidDocumentError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_document", "message": str(exc)},
+        ) from exc
+    except InvalidQuestionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_question", "message": str(exc)},
+        ) from exc
+    except DocumentTooLargeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={
+                "error": "document_too_large",
+                "message": str(exc),
+                "size": exc.size,
+                "limit": exc.limit,
+                "is_premium": exc.is_premium,
+                "limit_free": MAX_FILE_BYTES_FREE,
+                "limit_premium": MAX_FILE_BYTES_PREMIUM,
+            },
+        ) from exc
+    except InsufficientTokensError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "insufficient_tokens",
+                "required": exc.required,
+                "available": exc.available,
+                "cost": DOCUMENT_COST,
+            },
+        ) from exc
+    except UserNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="user_not_found",
+        ) from exc
+    except DocumentProviderError as exc:
+        await session.rollback()
+        logger.warning(
+            "generate.document.provider_error",
+            user_id=user.id,
+            request_id=request_id,
+            error=str(exc),
+            provider_error=exc.provider_error,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error": "document_provider_error",
+                "message": str(exc),
+                "provider_error": exc.provider_error,
+            },
+        ) from exc
+
+    try:
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001 — surface a clean 500
+        await session.rollback()
+        logger.exception(
+            "generate.document.commit_failed",
+            user_id=user.id,
+            request_id=request_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="commit_failed",
+        ) from exc
+
+    return DocumentAnalysisResponse(
+        format=outcome.format,  # type: ignore[arg-type]
+        text=outcome.text,
+        summary=outcome.summary,
+        answer=outcome.answer,
+        question=outcome.question,
+        page_count=outcome.page_count,
+        char_count=outcome.char_count,
+        file_size_bytes=outcome.file_size_bytes,
+        tokens_spent=outcome.tokens_spent,
+        new_balance=outcome.new_balance,
+        usage_log_id=outcome.usage_log_id,
+        transaction_id=outcome.transaction_id,
+        request_id=request_id,
+        composio_tool=outcome.composio_tool,
+        mcp_server=outcome.mcp_server,
+        processing_time_ms=outcome.processing_time_ms,
+    )

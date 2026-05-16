@@ -4,8 +4,9 @@ The data model is a two-level mapping ``{plan: {action: RateLimitRule}}``.
 ``action`` is one of:
 
 * ``per_hour`` / ``per_day`` — apply to every billable request from the user;
-* ``image_per_day`` / ``video_per_day`` / ``voice_per_day`` —
-  specialised quotas for the heavier media actions.
+* ``image_per_day`` / ``video_per_day`` / ``voice_per_day`` /
+  ``text_per_day`` / ``search_per_day`` / ``document_per_day`` —
+  specialised quotas for the heavier media / Phase 2 actions.
 
 Plans are: ``anonymous`` (unauthenticated callers), ``free`` (registered
 without a paid plan), ``premium`` (one-time premium grant), ``pro``
@@ -43,14 +44,24 @@ KNOWN_PLANS: Final[frozenset[str]] = frozenset(
 )
 
 # Canonical action codes. ``default`` is the catch-all bucket the dependency
-# uses when the caller doesn't specify ``image``/``video``/``voice``/``text``.
+# uses when the caller doesn't specify a specialised bucket.
 ACTION_DEFAULT: Final[str] = "default"
 ACTION_IMAGE: Final[str] = "image"
 ACTION_VIDEO: Final[str] = "video"
 ACTION_VOICE: Final[str] = "voice"
 ACTION_TEXT: Final[str] = "text"
+ACTION_SEARCH: Final[str] = "search"
+ACTION_DOCUMENT: Final[str] = "document"
 KNOWN_ACTIONS: Final[frozenset[str]] = frozenset(
-    {ACTION_DEFAULT, ACTION_IMAGE, ACTION_VIDEO, ACTION_VOICE, ACTION_TEXT}
+    {
+        ACTION_DEFAULT,
+        ACTION_IMAGE,
+        ACTION_VIDEO,
+        ACTION_VOICE,
+        ACTION_TEXT,
+        ACTION_SEARCH,
+        ACTION_DOCUMENT,
+    }
 )
 
 
@@ -95,6 +106,8 @@ DEFAULT_RATE_LIMITS: Final[dict[str, dict[str, RateLimitRule]]] = {
         "video_per_day": _day(2),
         "voice_per_day": _day(10),
         "text_per_day": _day(50),
+        "search_per_day": _day(30),
+        "document_per_day": _day(3),
     },
     PLAN_PREMIUM: {
         "per_hour": _hour(100),
@@ -103,6 +116,8 @@ DEFAULT_RATE_LIMITS: Final[dict[str, dict[str, RateLimitRule]]] = {
         "video_per_day": _day(20),
         "voice_per_day": _day(100),
         "text_per_day": _day(500),
+        "search_per_day": _day(300),
+        "document_per_day": _day(30),
     },
     PLAN_PRO: {
         "per_hour": _hour(500),
@@ -111,6 +126,8 @@ DEFAULT_RATE_LIMITS: Final[dict[str, dict[str, RateLimitRule]]] = {
         "video_per_day": _day(100),
         "voice_per_day": _day(500),
         "text_per_day": _day(2_000),
+        "search_per_day": _day(1_500),
+        "document_per_day": _day(150),
     },
 }
 
@@ -124,6 +141,8 @@ ACTION_QUOTA_KEYS: Final[dict[str, tuple[str, ...]]] = {
     ACTION_VIDEO: ("per_hour", "per_day", "video_per_day"),
     ACTION_VOICE: ("per_hour", "per_day", "voice_per_day"),
     ACTION_TEXT: ("per_hour", "per_day", "text_per_day"),
+    ACTION_SEARCH: ("per_hour", "per_day", "search_per_day"),
+    ACTION_DOCUMENT: ("per_hour", "per_day", "document_per_day"),
 }
 
 
@@ -255,8 +274,11 @@ async def load_rate_limits(session: AsyncSession) -> RateLimitConfig:
 
 __all__ = [
     "ACTION_DEFAULT",
+    "ACTION_DOCUMENT",
     "ACTION_IMAGE",
     "ACTION_QUOTA_KEYS",
+    "ACTION_SEARCH",
+    "ACTION_TEXT",
     "ACTION_VIDEO",
     "ACTION_VOICE",
     "ADMIN_SETTING_KEY",
