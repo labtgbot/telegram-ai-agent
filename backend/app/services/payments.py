@@ -77,6 +77,9 @@ logger = get_logger(__name__)
 
 INVOICE_PREFIX = "invoice:"
 CHARGE_PREFIX = "tg:"
+REFERRAL_BONUS_PREFIX = "referral:"
+REFERRAL_BONUS_PACKAGE = "referral_bonus"
+DEFAULT_REFERRAL_BONUS_TOKENS = 100
 DEFAULT_CURRENCY = "XTR"
 PAYMENT_METHOD = "telegram_stars"
 
@@ -454,6 +457,11 @@ class PaymentService:
             tx = await self._fetch_transaction(result.transaction_id)
             user = await self._get_user(user_id)
 
+        await self._maybe_credit_referral_bonus(
+            referee=user,
+            purchase_transaction_id=int(tx.id),
+        )
+
         subscription_id: int | None = None
         expires_at: datetime | None = None
         if package.is_subscription:
@@ -559,6 +567,111 @@ class PaymentService:
         if user is None:
             raise UserNotFoundError(f"user {user_id} not found")
         return user
+
+    async def _maybe_credit_referral_bonus(
+        self,
+        *,
+        referee: User,
+        purchase_transaction_id: int,
+    ) -> None:
+        """Credit the inviter when ``referee`` completes their first purchase.
+
+        Skipped when:
+
+        * the user has no inviter (``referred_by`` is null);
+        * the user already has another completed ``purchase`` transaction
+          (this is not the first purchase);
+        * a ``referral_bonus`` row already exists for this referee (a
+          previous call already credited the inviter — idempotency).
+        """
+        if not referee.referred_by:
+            return
+
+        marker = f"{REFERRAL_BONUS_PREFIX}{referee.id}"
+        existing_bonus = await self.session.execute(
+            select(Transaction.id).where(Transaction.payment_id == marker)
+        )
+        if existing_bonus.scalar_one_or_none() is not None:
+            return
+
+        # Detect "first purchase" — count completed purchases other than the
+        # one we just upgraded.  If this user has a prior completed purchase
+        # the referrer was already paid (or should have been).
+        prior_stmt = (
+            select(Transaction.id)
+            .where(
+                Transaction.user_id == referee.id,
+                Transaction.transaction_type == "purchase",
+                Transaction.payment_status == "completed",
+                Transaction.id != purchase_transaction_id,
+            )
+            .limit(1)
+        )
+        if (await self.session.execute(prior_stmt)).scalar_one_or_none() is not None:
+            return
+
+        bonus = self._referral_bonus_amount()
+        if bonus <= 0:
+            return
+
+        referrer = await self._fetch_referrer(int(referee.referred_by))
+        if referrer is None or referrer.is_banned:
+            return
+
+        token_service = TokenService(self.session)
+        # Wrap the credit in a SAVEPOINT so a race on the partial unique
+        # index over ``payment_id`` rolls back only the duplicate insert —
+        # not the surrounding payment transaction.
+        savepoint = await self.session.begin_nested()
+        try:
+            credit = await token_service.add(
+                user_id=int(referrer.id),
+                amount=bonus,
+                transaction_type="bonus",
+                package_name=REFERRAL_BONUS_PACKAGE,
+                payment_id=marker,
+                payment_status="completed",
+                meta={
+                    "referee_user_id": int(referee.id),
+                    "purchase_transaction_id": purchase_transaction_id,
+                },
+            )
+        except IntegrityError:
+            await savepoint.rollback()
+            return
+        except UserNotFoundError:
+            await savepoint.rollback()
+            return
+        else:
+            await savepoint.commit()
+
+        logger.info(
+            "payment.referral_bonus_credited",
+            referrer_id=int(referrer.id),
+            referee_id=int(referee.id),
+            tokens=bonus,
+            transaction_id=credit.transaction_id,
+            purchase_transaction_id=purchase_transaction_id,
+        )
+
+    def _referral_bonus_amount(self) -> int:
+        """Read the configured referral bonus, defaulting to 100."""
+        try:
+            from app.core.config import get_settings
+
+            return int(
+                getattr(
+                    get_settings(),
+                    "telegram_referral_bonus_tokens",
+                    DEFAULT_REFERRAL_BONUS_TOKENS,
+                )
+            )
+        except Exception:  # noqa: BLE001 — fall back to the constant
+            return DEFAULT_REFERRAL_BONUS_TOKENS
+
+    async def _fetch_referrer(self, user_id: int) -> User | None:
+        stmt = select(User).where(User.id == user_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def _find_pending_invoice(self, payload: str) -> Transaction | None:
         stmt = (

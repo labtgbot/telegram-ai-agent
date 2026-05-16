@@ -47,6 +47,13 @@ export interface DeleteAccountResponse {
   status: "queued" | "deleted";
 }
 
+export interface ReferralSummary {
+  referral_code: string;
+  referrals_count: number;
+  bonus_tokens_earned: number;
+  referral_link: string;
+}
+
 export function normalizeServiceType(value: string | null | undefined): ServiceType {
   if (!value) return "other";
   const lower = value.toLowerCase();

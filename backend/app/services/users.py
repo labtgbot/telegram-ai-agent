@@ -15,12 +15,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.rbac import Role
 from app.models.user import User
 
-REFERRAL_CODE_LENGTH = 10
+REFERRAL_CODE_LENGTH = 8
+# RFC 4648 base32 alphabet — uppercase letters and digits 2-7. Avoids
+# ambiguous glyphs (0/O, 1/I/L) which matters when users dictate codes
+# verbally or read them off a screen.
+_REFERRAL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 
 
 def generate_referral_code() -> str:
-    """Return a URL-safe referral code (uppercase, hex-ish)."""
-    return secrets.token_hex(REFERRAL_CODE_LENGTH // 2).upper()
+    """Return a URL-safe 8-character base32 referral code."""
+    return "".join(secrets.choice(_REFERRAL_ALPHABET) for _ in range(REFERRAL_CODE_LENGTH))
 
 
 async def find_user_by_id(session: AsyncSession, user_id: int) -> User | None:

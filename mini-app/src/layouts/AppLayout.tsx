@@ -9,6 +9,7 @@ const NAV_ITEMS: ReadonlyArray<{ to: string; key: TranslationKey }> = [
   { to: "/balance", key: "nav.balance" },
   { to: "/profile", key: "nav.profile" },
   { to: "/history", key: "nav.history" },
+  { to: "/referral", key: "nav.referral" },
   { to: "/settings", key: "nav.settings" },
 ];
 

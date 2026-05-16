@@ -4,6 +4,7 @@ import type {
   DataExportRequest,
   DataExportResponse,
   DeleteAccountResponse,
+  ReferralSummary,
   UsageHistoryPage,
   UsageHistoryQuery,
 } from "@/types/profile";
@@ -37,6 +38,10 @@ export class UserApi {
 
   deleteAccount(): Promise<DeleteAccountResponse> {
     return this.client.delete<DeleteAccountResponse>("/user/account");
+  }
+
+  getReferralSummary(): Promise<ReferralSummary> {
+    return this.client.get<ReferralSummary>("/user/referral");
   }
 }
 
