@@ -60,6 +60,24 @@ def _run_alembic_upgrade(url: str) -> None:
     command.upgrade(cfg, "head")
 
 
+async def _truncate_user_tables(url: str) -> None:
+    engine = create_async_engine(url, future=True)
+    try:
+        async with engine.begin() as conn:
+            result = await conn.exec_driver_sql(
+                "SELECT tablename FROM pg_tables "
+                "WHERE schemaname = 'public' AND tablename <> 'alembic_version'"
+            )
+            tables = [row[0] for row in result.fetchall()]
+            if tables:
+                quoted = ", ".join(f'"{t}"' for t in tables)
+                await conn.exec_driver_sql(
+                    f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE"
+                )
+    finally:
+        await engine.dispose()
+
+
 @pytest.fixture(scope="session")
 def database_url() -> str:
     url = _database_url()
@@ -68,6 +86,10 @@ def database_url() -> str:
     if not asyncio.run(_can_connect(url)):
         pytest.skip(f"Cannot reach database at {url} — skipping DB integration tests")
     _run_alembic_upgrade(url)
+    # The per-test fixture wraps work in a rollback'd transaction, but rows
+    # committed before pytest started (e.g. by CI's ``scripts.seed`` step)
+    # would leak into aggregate queries. Wipe them once per session.
+    asyncio.run(_truncate_user_tables(url))
     return url
 
 
