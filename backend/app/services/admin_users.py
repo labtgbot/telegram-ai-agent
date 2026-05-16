@@ -15,7 +15,7 @@ import csv
 import io
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from sqlalchemy import Select, and_, asc, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -155,8 +155,8 @@ def _coerce_search(value: str | None) -> tuple[str | None, int | None]:
     if not raw:
         return None, None
     if raw.startswith("@"):
-        raw = raw[1:].strip() or None
-        return raw.lower() if raw else None, None
+        stripped = raw[1:].strip()
+        return (stripped.lower() if stripped else None), None
     if raw.lstrip("-").isdigit():
         try:
             return None, int(raw)
@@ -189,12 +189,12 @@ def _apply_filters(stmt: Select[Any], filters: UserListFilters) -> Select[Any]:
     return stmt
 
 
-def _coerce_sort(field_: str, direction: str) -> tuple[str, str]:
+def _coerce_sort(field_: str, direction: str) -> tuple[SortField, SortDirection]:
     if field_ not in ALLOWED_SORT_FIELDS:
         raise InvalidFilterError(f"unsupported sort field: {field_}")
     if direction not in ("asc", "desc"):
         raise InvalidFilterError(f"unsupported sort direction: {direction}")
-    return field_, direction
+    return cast(SortField, field_), cast(SortDirection, direction)
 
 
 async def list_users(
@@ -208,7 +208,7 @@ async def list_users(
 ) -> UserListPage:
     """Return a paginated list of users matching ``filters``."""
     filters = filters or UserListFilters()
-    field_, direction = _coerce_sort(sort, direction)
+    sort_field, sort_direction = _coerce_sort(sort, direction)
 
     page = max(int(page or 1), 1)
     limit = max(min(int(limit or DEFAULT_LIMIT), MAX_LIMIT), 1)
@@ -217,8 +217,8 @@ async def list_users(
     count_stmt = _apply_filters(select(func.count(User.id)), filters)
     total = int((await session.execute(count_stmt)).scalar_one())
 
-    order_col = getattr(User, field_)
-    order_clause = desc(order_col) if direction == "desc" else asc(order_col)
+    order_col = getattr(User, sort_field)
+    order_clause = desc(order_col) if sort_direction == "desc" else asc(order_col)
 
     rows_stmt = (
         _apply_filters(select(User), filters)

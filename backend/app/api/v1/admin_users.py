@@ -31,10 +31,10 @@ from app.models.admin_audit_log import AdminAuditLog
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.services.admin_users import (
+    MAX_MESSAGE_LEN,
     CannotTargetAdminError,
     CannotTargetSelfError,
     InvalidFilterError,
-    MAX_MESSAGE_LEN,
     ServiceUsageRow,
     UserListFilters,
     UserNotFoundError,
@@ -49,6 +49,8 @@ from app.services.admin_users import (
 from app.services.token_service import (
     InvalidAmountError,
     TokenService,
+)
+from app.services.token_service import (
     UserNotFoundError as TokenUserNotFoundError,
 )
 
