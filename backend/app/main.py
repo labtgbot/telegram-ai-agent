@@ -13,6 +13,8 @@ from fastapi import FastAPI
 
 from app import __version__
 from app.api.v1 import router as v1_router
+from app.api.v1.bot import close_bot_client, get_bot_client
+from app.bot.commands import set_bot_commands
 from app.core.config import get_settings
 from app.core.database import get_engine
 from app.core.logging import configure_logging, get_logger
@@ -30,6 +32,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         debug=settings.app_debug,
         version=__version__,
     )
+    if settings.telegram_bot_token and settings.telegram_set_commands_on_startup:
+        try:
+            await set_bot_commands(get_bot_client())
+        except Exception as exc:  # noqa: BLE001 — never block startup on Telegram
+            logger.warning("app.startup.set_commands_failed", error=str(exc))
     try:
         yield
     finally:
@@ -43,6 +50,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await close_redis()
         except Exception as exc:
             logger.warning("app.shutdown.redis_close_failed", error=str(exc))
+        try:
+            await close_bot_client()
+        except Exception as exc:
+            logger.warning("app.shutdown.bot_client_close_failed", error=str(exc))
 
 
 def create_app() -> FastAPI:
