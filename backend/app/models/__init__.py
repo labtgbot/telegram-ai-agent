@@ -6,6 +6,7 @@ which is what Alembic introspects in ``env.py``.
 from app.models.admin_audit_log import AdminAuditLog
 from app.models.admin_setting import AdminSetting
 from app.models.base import Base
+from app.models.broadcast import Broadcast, BroadcastRecipient
 from app.models.chat_history import ChatMessage, ChatThread
 from app.models.daily_analytics import DailyAnalytics
 from app.models.daily_bonus_claim import DailyBonusClaim
@@ -19,6 +20,8 @@ __all__ = [
     "AdminAuditLog",
     "AdminSetting",
     "Base",
+    "Broadcast",
+    "BroadcastRecipient",
     "ChatMessage",
     "ChatThread",
     "DailyAnalytics",
