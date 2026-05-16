@@ -18,6 +18,8 @@ from app.bot.handlers import (
     COMMAND_HANDLERS,
     HandlerContext,
     handle_callback_query,
+    handle_pre_checkout_query,
+    handle_successful_payment,
 )
 from app.core.config import Settings
 from app.core.logging import get_logger
@@ -58,11 +60,19 @@ async def dispatch_update(
         await _safe_call(ctx, handle_callback_query, label="callback")
         return
 
+    if "pre_checkout_query" in update:
+        await _safe_call(ctx, handle_pre_checkout_query, label="pre_checkout")
+        return
+
     message = update.get("message") or update.get("edited_message")
     if not message:
         logger.info("bot.update.ignored", keys=list(update.keys()))
         return
     ctx.message = message
+
+    if "successful_payment" in message:
+        await _safe_call(ctx, handle_successful_payment, label="successful_payment")
+        return
 
     command = _extract_command(message.get("text"), bot_username=settings.telegram_bot_username)
     if command is None:

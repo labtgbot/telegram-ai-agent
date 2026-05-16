@@ -13,12 +13,19 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.client import TelegramClient
+from app.bot.client import TelegramApiError, TelegramClient
 from app.bot.commands import BOT_COMMANDS
 from app.bot.keyboards import balance_actions, main_menu, referral_share
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.services.bot_users import register_or_update_user
+from app.services.payment_packages import list_packages
+from app.services.payments import (
+    InvoiceNotFoundError,
+    InvoicePayloadInvalidError,
+    PackageNotFoundError,
+    PaymentService,
+)
 from app.services.users import find_user_by_telegram_id
 
 logger = get_logger(__name__)
@@ -154,16 +161,95 @@ async def handle_balance(ctx: HandlerContext) -> None:
     )
 
 
+def _packages_keyboard() -> dict[str, Any]:
+    """Inline keyboard listing every active Stars package."""
+    rows: list[list[dict[str, Any]]] = []
+    for pkg in list_packages():
+        label = f"{pkg.title} — {pkg.stars} ⭐"
+        if pkg.is_subscription:
+            label = f"{pkg.title} — {pkg.stars} ⭐ / month"
+        rows.append([{"text": label, "callback_data": f"buy:{pkg.code}"}])
+    return {"inline_keyboard": rows}
+
+
+def _format_packages_text() -> str:
+    lines = ["🛒 <b>Token packages</b>", ""]
+    for pkg in list_packages():
+        suffix = " / month" if pkg.is_subscription else ""
+        lines.append(
+            f"• <b>{pkg.title}</b> — {pkg.stars} ⭐ "
+            f"for {pkg.tokens} tokens{suffix}"
+        )
+    lines.append("")
+    lines.append("Tap a package below to receive a payment link.")
+    return "\n".join(lines)
+
+
 async def handle_buy(ctx: HandlerContext) -> None:
     if ctx.chat_id is None:
         return
     await ctx.client.send_message(
         ctx.chat_id,
+        _format_packages_text(),
+        reply_markup=_packages_keyboard(),
+    )
+
+
+async def handle_buy_package(ctx: HandlerContext, *, package_code: str) -> None:
+    """Issue a Stars invoice for ``package_code`` and DM the link to the user."""
+    if ctx.chat_id is None or ctx.from_user is None:
+        return
+    user = await find_user_by_telegram_id(ctx.session, int(ctx.from_user["id"]))
+    if user is None:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "I don't recognise you yet — send /start to register.",
+        )
+        return
+
+    service = PaymentService(ctx.session, client=ctx.client)
+    try:
+        invoice = await service.create_invoice(
+            user_id=user.id,
+            package_code=package_code,
+        )
+    except PackageNotFoundError:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "That package is no longer available. Tap /buy to see the latest catalog.",
+        )
+        return
+    except TelegramApiError as exc:
+        logger.warning(
+            "payment.invoice_link_failed",
+            user_id=user.id,
+            package=package_code,
+            error=str(exc),
+        )
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "Couldn't create an invoice right now — please try again in a moment.",
+        )
+        return
+
+    keyboard: dict[str, Any] = {
+        "inline_keyboard": [
+            [{"text": f"Pay {invoice.stars_amount} ⭐", "url": invoice.telegram_invoice_link}],
+        ],
+    }
+    sub_line = (
+        "\n♻️ Renews automatically every 30 days. Cancel anytime."
+        if invoice.is_subscription
+        else ""
+    )
+    await ctx.client.send_message(
+        ctx.chat_id,
         (
-            "🛒 <b>Token packages</b>\n"
-            "Payments via Telegram Stars are launching in Phase 2.\n"
-            "Use /balance to check what you have and /referral to earn more in the meantime."
+            f"🧾 <b>{invoice.package_code.title()}</b> — "
+            f"{invoice.stars_amount} ⭐ for {invoice.tokens_amount} tokens.{sub_line}"
+            "\n\nTap the button below to complete the payment."
         ),
+        reply_markup=keyboard,
     )
 
 
@@ -243,11 +329,142 @@ async def handle_callback_query(ctx: HandlerContext) -> None:
             )
         return
 
+    if data.startswith("buy:"):
+        await handle_buy_package(ctx, package_code=data.split(":", 1)[1])
+        return
+
     handler = _CALLBACK_TO_COMMAND.get(data)
     if handler is None:
         logger.info("bot.callback.unknown", data=data)
         return
     await handler(ctx)
+
+
+# ----------------------------------------------------------------- payments
+
+
+async def handle_pre_checkout_query(ctx: HandlerContext) -> None:
+    """Confirm or reject a Telegram ``pre_checkout_query``.
+
+    Telegram requires the answer within 10 seconds, so we keep the work
+    light: validate the payload against the package catalog, look up the
+    pending invoice, and reply.  Any unexpected error answers ``ok=False``
+    so the user isn't charged.
+    """
+    query = ctx.update.get("pre_checkout_query") or {}
+    query_id = query.get("id")
+    if not query_id:
+        return
+
+    service = PaymentService(ctx.session, client=ctx.client)
+    try:
+        await service.confirm_pre_checkout(
+            payload=str(query.get("invoice_payload") or ""),
+            total_amount=int(query.get("total_amount") or 0),
+            currency=str(query.get("currency") or ""),
+        )
+    except (
+        PackageNotFoundError,
+        InvoiceNotFoundError,
+        InvoicePayloadInvalidError,
+    ) as exc:
+        logger.warning(
+            "payment.pre_checkout.rejected",
+            query_id=query_id,
+            error=str(exc),
+        )
+        try:
+            await ctx.client.answer_pre_checkout_query(
+                query_id,
+                ok=False,
+                error_message=(
+                    "We couldn't verify this invoice. Please open /buy "
+                    "and try again."
+                ),
+            )
+        except TelegramApiError as send_exc:
+            logger.warning(
+                "payment.pre_checkout.ack_failed", error=str(send_exc)
+            )
+        return
+    except Exception as exc:  # noqa: BLE001 — never let pre_checkout charge a user on error
+        logger.exception("payment.pre_checkout.unhandled", error=str(exc))
+        try:
+            await ctx.client.answer_pre_checkout_query(
+                query_id,
+                ok=False,
+                error_message="Internal error — please try again.",
+            )
+        except TelegramApiError as send_exc:
+            logger.warning(
+                "payment.pre_checkout.ack_failed", error=str(send_exc)
+            )
+        return
+
+    try:
+        await ctx.client.answer_pre_checkout_query(query_id, ok=True)
+    except TelegramApiError as exc:
+        logger.warning("payment.pre_checkout.ack_failed", error=str(exc))
+
+
+async def handle_successful_payment(ctx: HandlerContext) -> None:
+    """Credit tokens after Telegram confirms a Stars payment."""
+    if ctx.message is None:
+        return
+    payment = ctx.message.get("successful_payment")
+    if not isinstance(payment, dict):
+        return
+    from_user = ctx.message.get("from") or {}
+    telegram_user_id = int(from_user.get("id") or 0)
+
+    service = PaymentService(ctx.session, client=ctx.client)
+    try:
+        result = await service.finalize_successful_payment(
+            telegram_user_id=telegram_user_id,
+            payload=str(payment.get("invoice_payload") or ""),
+            total_amount=int(payment.get("total_amount") or 0),
+            currency=str(payment.get("currency") or ""),
+            telegram_payment_charge_id=str(
+                payment.get("telegram_payment_charge_id") or ""
+            ),
+            provider_payment_charge_id=payment.get(
+                "provider_payment_charge_id"
+            ),
+            is_recurring=bool(payment.get("is_recurring") or False),
+        )
+    except (PackageNotFoundError, InvoicePayloadInvalidError) as exc:
+        logger.error(
+            "payment.success.invalid_payload",
+            telegram_user_id=telegram_user_id,
+            error=str(exc),
+        )
+        if ctx.chat_id is not None:
+            await ctx.client.send_message(
+                ctx.chat_id,
+                "Payment received but I couldn't match it to a package — "
+                "please contact support.",
+            )
+        return
+
+    if ctx.chat_id is None:
+        return
+    if result.already_processed:
+        # Telegram retried — stay silent so we don't spam the user.
+        return
+
+    suffix = (
+        f"\n\n♻️ Premium active until <b>{result.expires_at:%Y-%m-%d}</b>."
+        if result.is_subscription and result.expires_at is not None
+        else ""
+    )
+    await ctx.client.send_message(
+        ctx.chat_id,
+        (
+            f"✅ Payment received! "
+            f"Credited <b>{result.tokens_credited}</b> tokens. "
+            f"Balance: <b>{result.new_balance}</b>." + suffix
+        ),
+    )
 
 
 # ----------------------------------------------------------------- registry
