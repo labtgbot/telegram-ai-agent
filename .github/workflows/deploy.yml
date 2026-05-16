@@ -184,7 +184,7 @@ jobs:
           docker compose \
             -f docker/compose.prod.yml \
             -f docker/compose.backup.yml \
-            --env-file .env.prod config > /tmp/compose.backup.json
+            --env-file .env.prod config --format json > /tmp/compose.backup.json
           test -s /tmp/compose.backup.json
           jq -r '.services | keys[]' /tmp/compose.backup.json | sort > /tmp/svc.txt
           grep -qx backup-supervisor /tmp/svc.txt
