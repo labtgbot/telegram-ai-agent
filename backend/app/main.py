@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from app import __version__
 from app.api.v1 import router as v1_router
 from app.api.v1.bot import close_bot_client, get_bot_client
+from app.api.v1.generate import close_composio_client
 from app.bot.commands import set_bot_commands
 from app.core.config import get_settings
 from app.core.database import get_engine
@@ -54,6 +55,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await close_bot_client()
         except Exception as exc:
             logger.warning("app.shutdown.bot_client_close_failed", error=str(exc))
+        try:
+            await close_composio_client()
+        except Exception as exc:
+            logger.warning("app.shutdown.composio_close_failed", error=str(exc))
 
 
 def create_app() -> FastAPI:

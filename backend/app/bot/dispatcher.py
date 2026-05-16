@@ -23,6 +23,7 @@ from app.bot.handlers import (
 )
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.services.composio import ComposioClient
 
 logger = get_logger(__name__)
 
@@ -46,6 +47,7 @@ async def dispatch_update(
     settings: Settings,
     client: TelegramClient,
     session: AsyncSession,
+    composio: ComposioClient | None = None,
 ) -> None:
     """Route ``update`` to the appropriate handler."""
     ctx = HandlerContext(
@@ -53,6 +55,7 @@ async def dispatch_update(
         settings=settings,
         client=client,
         session=session,
+        composio=composio,
     )
 
     if "callback_query" in update:

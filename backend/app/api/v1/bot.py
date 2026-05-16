@@ -13,6 +13,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
 
+from app.api.v1.generate import ComposioClientDep
 from app.auth.dependencies import SessionDep, SettingsDep
 from app.bot.client import TelegramClient
 from app.bot.dispatcher import dispatch_update
@@ -83,6 +84,7 @@ async def telegram_webhook(
     settings: SettingsDep,
     session: SessionDep,
     client: BotClientDep,
+    composio: ComposioClientDep,
     update: dict[str, Any],
     x_telegram_bot_api_secret_token: Annotated[str | None, Header()] = None,
 ) -> WebhookAck:
@@ -98,6 +100,7 @@ async def telegram_webhook(
             settings=settings,
             client=client,
             session=session,
+            composio=composio,
         )
         try:
             await session.commit()
