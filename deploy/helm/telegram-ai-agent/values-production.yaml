@@ -96,6 +96,40 @@ admin:
       cpu: 1000m
       memory: 512Mi
 
+backup:
+  enabled: true
+  s3:
+    # Operators MUST set these via `--set` / a per-region values file. Leaving
+    # them blank surfaces a clear "BACKUP_S3_BUCKET unset" error from the
+    # script rather than silently uploading to the wrong place.
+    bucket: ""
+    region: ""
+    kmsKeyId: ""
+  retentionDays: 30
+  walRetentionDays: 7
+  postgres:
+    enabled: true
+    schedule: "0 2 * * *"
+  redis:
+    enabled: true
+    schedule: "30 2 * * *"
+  media:
+    enabled: true
+    sourceBucket: ""
+    schedule: "0 3 * * *"
+  prune:
+    enabled: true
+    schedule: "0 4 * * *"
+  verify:
+    enabled: true
+    # 06:00 UTC on the first day of each quarter.
+    schedule: "0 6 1 1,4,7,10 *"
+  serviceAccount:
+    create: true
+    annotations: {}
+      # When running on EKS, prefer IRSA over static AWS keys:
+      # eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/tgai-backup
+
 ingress:
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"

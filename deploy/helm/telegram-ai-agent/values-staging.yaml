@@ -66,6 +66,30 @@ admin:
 worker:
   enabled: false
 
+# Staging exercises the backup pipeline daily so we notice broken jobs before
+# they bite production. Retention is shorter and verify only runs monthly.
+backup:
+  enabled: true
+  s3:
+    bucket: ""
+    region: ""
+  retentionDays: 14
+  walRetentionDays: 3
+  postgres:
+    enabled: true
+    schedule: "0 3 * * *"
+  redis:
+    enabled: true
+    schedule: "30 3 * * *"
+  media:
+    enabled: false
+  prune:
+    enabled: true
+    schedule: "0 5 * * *"
+  verify:
+    enabled: true
+    schedule: "0 7 1 * *"
+
 ingress:
   hosts:
     - host: staging-bot.example.com
