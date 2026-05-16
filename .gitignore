@@ -54,3 +54,6 @@ Thumbs.db
 storage/
 uploads/
 media/
+
+# Playwright MCP scratch artifacts
+.playwright-mcp/
