@@ -26,6 +26,7 @@ BOT_COMMANDS: tuple[BotCommand, ...] = (
     BotCommand("start", "Запустить бота и получить бонус"),
     BotCommand("balance", "Показать баланс токенов"),
     BotCommand("buy", "Купить пакет токенов"),
+    BotCommand("image", "Сгенерировать изображение по описанию"),
     BotCommand("profile", "Мой профиль"),
     BotCommand("referral", "Реферальная ссылка"),
     BotCommand("help", "Справка по командам"),

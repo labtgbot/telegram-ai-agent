@@ -117,6 +117,30 @@ class TelegramClient:
             reply_markup=reply_markup,
         )
 
+    async def send_photo(
+        self,
+        chat_id: int,
+        photo: str,
+        *,
+        caption: str | None = None,
+        parse_mode: str | None = "HTML",
+        reply_markup: dict[str, Any] | None = None,
+    ) -> Any:
+        """Send a photo by URL (or ``file_id``).
+
+        Uploading raw bytes is not exposed in Phase 2 because every
+        Composio image toolkit returns a fetchable URL — Telegram can
+        ingest it directly via ``photo`` set to the URL.
+        """
+        return await self.call(
+            "sendPhoto",
+            chat_id=chat_id,
+            photo=photo,
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+
     async def edit_message_text(
         self,
         chat_id: int,

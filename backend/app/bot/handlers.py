@@ -19,12 +19,24 @@ from app.bot.keyboards import balance_actions, main_menu, referral_share
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.services.bot_users import register_or_update_user
+from app.services.composio import ComposioClient
+from app.services.image_generation import (
+    QUALITY_COST,
+    QUALITY_STANDARD,
+    ImageGenerationService,
+    ImageProviderError,
+    InvalidPromptError,
+)
 from app.services.payment_packages import list_packages
 from app.services.payments import (
     InvoiceNotFoundError,
     InvoicePayloadInvalidError,
     PackageNotFoundError,
     PaymentService,
+)
+from app.services.token_service import (
+    InsufficientTokensError,
+    UserNotFoundError,
 )
 from app.services.users import find_user_by_telegram_id
 
@@ -37,12 +49,18 @@ class HandlerContext:
 
     ``message`` is set for command messages; ``callback_query`` is set for
     inline-button taps.  The dispatcher fills exactly one of them.
+
+    ``composio`` is optional so legacy call sites and tests that only
+    exercise Phase 1 handlers don't need to wire a mock client; the
+    handlers that need it (``/image``) raise a friendly error when it's
+    missing.
     """
 
     update: dict[str, Any]
     settings: Settings
     client: TelegramClient
     session: AsyncSession
+    composio: ComposioClient | None = None
     message: dict[str, Any] | None = None
     callback_query: dict[str, Any] | None = None
 
@@ -251,6 +269,117 @@ async def handle_buy_package(ctx: HandlerContext, *, package_code: str) -> None:
         ),
         reply_markup=keyboard,
     )
+
+
+def _parse_image_args(text: str | None) -> str | None:
+    """Extract the prompt that follows ``/image`` in the command text."""
+    if not text:
+        return None
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    return parts[1].strip() or None
+
+
+async def handle_image(ctx: HandlerContext) -> None:
+    """Generate an image from a free-form prompt: ``/image <prompt>``."""
+    if ctx.chat_id is None or ctx.from_user is None:
+        return
+
+    prompt = _parse_image_args((ctx.message or {}).get("text"))
+    if not prompt:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            (
+                "🎨 <b>Image generation</b>\n"
+                "Usage: <code>/image &lt;prompt&gt;</code>\n\n"
+                f"Cost: <b>{QUALITY_COST[QUALITY_STANDARD]}</b> tokens "
+                "per standard image."
+            ),
+        )
+        return
+
+    user = await find_user_by_telegram_id(ctx.session, int(ctx.from_user["id"]))
+    if user is None:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "I don't recognise you yet — send /start to register.",
+        )
+        return
+
+    if ctx.composio is None:
+        logger.error("bot.image.composio_unconfigured", user_id=user.id)
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "Image generation is temporarily unavailable. Please try again later.",
+        )
+        return
+
+    service = ImageGenerationService(ctx.session, ctx.composio)
+    try:
+        outcome = await service.generate(
+            user_id=user.id,
+            prompt=prompt,
+            quality=QUALITY_STANDARD,
+        )
+    except InvalidPromptError as exc:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            f"❌ {exc}",
+        )
+        return
+    except InsufficientTokensError as exc:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            (
+                "💸 Not enough tokens. "
+                f"Need <b>{exc.required}</b>, you have <b>{exc.available}</b>.\n"
+                "Tap /buy to top up."
+            ),
+        )
+        return
+    except UserNotFoundError:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "I don't recognise you yet — send /start to register.",
+        )
+        return
+    except ImageProviderError as exc:
+        await ctx.session.rollback()
+        logger.warning(
+            "bot.image.provider_error",
+            user_id=user.id,
+            error=str(exc),
+            provider_error=exc.provider_error,
+        )
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "🛠 The image service is having trouble right now — please try again in a moment.",
+        )
+        return
+
+    caption = (
+        f"🎨 Generated for <i>{prompt[:160]}</i>\n"
+        f"Cost: <b>{outcome.tokens_spent}</b> tokens · "
+        f"Balance: <b>{outcome.new_balance}</b>"
+    )
+    try:
+        await ctx.client.send_photo(
+            ctx.chat_id,
+            outcome.result_url,
+            caption=caption,
+        )
+    except TelegramApiError as exc:
+        # Telegram couldn't fetch the URL — fall back to a plain link.
+        logger.warning(
+            "bot.image.send_photo_failed",
+            user_id=user.id,
+            error=str(exc),
+        )
+        await ctx.client.send_message(
+            ctx.chat_id,
+            f"{caption}\n\n🔗 {outcome.result_url}",
+        )
 
 
 async def handle_profile(ctx: HandlerContext) -> None:
@@ -474,6 +603,7 @@ COMMAND_HANDLERS = {
     "help": handle_help,
     "balance": handle_balance,
     "buy": handle_buy,
+    "image": handle_image,
     "profile": handle_profile,
     "referral": handle_referral,
 }
