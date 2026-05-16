@@ -73,7 +73,7 @@ jobs:
 
       - name: Upload build artifact
         if: steps.detect.outputs.ready == 'true' && hashFiles('admin-dashboard/.next/**', 'admin-dashboard/dist/**', 'admin-dashboard/build/**') != ''
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: admin-dashboard-build
           path: |
