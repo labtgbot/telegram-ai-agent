@@ -35,13 +35,13 @@ from typing import Any, Final
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.services.balance_cache import get_default_balance_cache
 from app.services.composio import (
     ComposioClient,
     ComposioError,
     ToolResult,
     log_invocation,
 )
-from app.services.balance_cache import get_default_balance_cache
 from app.services.token_service import (
     InsufficientTokensError,
     TokenService,

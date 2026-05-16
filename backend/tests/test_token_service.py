@@ -221,7 +221,7 @@ class _SessionRecorder:
         balance = self.balance
 
         class _Result:
-            def scalar_one_or_none(self_inner) -> int | None:
+            def scalar_one_or_none(self) -> int | None:
                 return balance
 
         return _Result()

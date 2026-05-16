@@ -38,13 +38,13 @@ from app.services.account_deletion import (
     get_deletion_status,
     request_account_deletion,
 )
+from app.services.balance_cache import get_default_balance_cache
 from app.services.daily_bonus import (
     AlreadyClaimedError,
     DailyBonusDisabledError,
     DailyBonusService,
 )
 from app.services.data_export import build_user_data_export
-from app.services.balance_cache import get_default_balance_cache
 from app.services.payments import REFERRAL_BONUS_PACKAGE
 from app.services.token_service import TokenService, UserNotFoundError
 

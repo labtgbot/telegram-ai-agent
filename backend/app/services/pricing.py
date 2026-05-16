@@ -425,10 +425,7 @@ async def load_pricing_config(session: AsyncSession) -> PricingConfig:
         if ttl > 0 and snapshot is not None and snapshot[0] > monotonic():
             return snapshot[1]
         config = await _read_pricing_from_db(session)
-        if ttl > 0:
-            _pricing_cache = (monotonic() + ttl, config)
-        else:
-            _pricing_cache = None
+        _pricing_cache = (monotonic() + ttl, config) if ttl > 0 else None
         return config
 
 

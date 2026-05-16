@@ -24,7 +24,7 @@ Issue #36 acceptance criteria: *кэширование баланса в Redis
 """
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, cast
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -129,7 +129,11 @@ def get_default_balance_cache() -> BalanceCache:
     if _default_cache is None:
         from app.core.redis import get_redis
 
-        _default_cache = BalanceCache(get_redis())
+        # ``redis.asyncio.Redis`` advertises wider key types (``bytes |
+        # str | memoryview``) and a ``Awaitable | Any`` return union
+        # that does not structurally match our narrow ``_RedisLike``
+        # protocol. The runtime contract holds — just satisfy mypy.
+        _default_cache = BalanceCache(cast("_RedisLike", get_redis()))
     return _default_cache
 
 

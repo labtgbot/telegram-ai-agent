@@ -67,6 +67,7 @@ from app.core.metrics import observe_payment_event, observe_purchase
 from app.models.subscription import Subscription
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.services.balance_cache import get_default_balance_cache
 from app.services.payment_packages import (
     PRO_SUBSCRIPTION_DAYS,
     PaymentPackage,
@@ -76,7 +77,6 @@ from app.services.pricing import (
     apply_pricing_to_package,
     load_pricing_config,
 )
-from app.services.balance_cache import get_default_balance_cache
 from app.services.token_service import TokenService, UserNotFoundError
 
 logger = get_logger(__name__)
