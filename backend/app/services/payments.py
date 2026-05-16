@@ -63,6 +63,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.client import TelegramApiError, TelegramClient
 from app.core.logging import get_logger
+from app.core.metrics import observe_payment_event, observe_purchase
 from app.models.subscription import Subscription
 from app.models.transaction import Transaction
 from app.models.user import User
@@ -295,6 +296,7 @@ class PaymentService:
             transaction_id=pending.id,
             stars=package.stars,
         )
+        observe_payment_event(event="invoice_created", package=package.code)
         return InvoiceCreation(
             invoice_id=payload,
             payload=payload,
@@ -390,6 +392,9 @@ class PaymentService:
                 user_id=user.id,
                 charge_id=telegram_payment_charge_id,
                 transaction_id=existing.id,
+            )
+            observe_payment_event(
+                event="duplicate", package=existing.package_name
             )
             return PaymentResult(
                 transaction_id=int(existing.id),
@@ -515,6 +520,7 @@ class PaymentService:
 
         tokens_credited = int(tx.tokens_amount or package.tokens)
         stars_amount = int(tx.stars_amount or package.stars)
+        usd_amount_value = float(tx.usd_amount) if tx.usd_amount is not None else None
         logger.info(
             "payment.completed",
             user_id=user.id,
@@ -524,6 +530,16 @@ class PaymentService:
             tokens=tokens_credited,
             transaction_id=int(tx.id),
             recurring=is_recurring,
+        )
+        observe_purchase(
+            package=package.code,
+            tokens=tokens_credited,
+            stars=stars_amount,
+            usd=usd_amount_value,
+        )
+        observe_payment_event(
+            event="renewal" if is_recurring else "completed",
+            package=package.code,
         )
         return PaymentResult(
             transaction_id=int(tx.id),
@@ -899,6 +915,12 @@ async def process_subscription_renewals(
             transaction_id=credit.transaction_id,
             new_expires_at=sub.expires_at.isoformat(),
         )
+        observe_purchase(
+            package=package.code,
+            tokens=int(package.tokens),
+            stars=int(package.stars),
+        )
+        observe_payment_event(event="renewal", package=package.code)
         results.append(
             PaymentResult(
                 transaction_id=int(credit.transaction_id),

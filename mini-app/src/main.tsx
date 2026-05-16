@@ -3,6 +3,9 @@ import { createRoot } from "react-dom/client";
 
 import { App } from "@/App";
 import "@/index.css";
+import { initSentry } from "@/lib/sentry";
+
+initSentry();
 
 const container = document.getElementById("root");
 if (!container) {

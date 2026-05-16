@@ -170,6 +170,44 @@ class Settings(BaseSettings):
         description="Issuer label shown in TOTP-compatible apps.",
     )
 
+    # ------------------------------------------------------------------ monitoring
+    metrics_enabled: bool = Field(
+        default=True,
+        description="Expose Prometheus metrics at /metrics via prometheus-fastapi-instrumentator.",
+    )
+    metrics_path: str = Field(
+        default="/metrics",
+        description="Path on the FastAPI app where Prometheus metrics are exposed.",
+    )
+    metrics_active_user_window_seconds: int = Field(
+        default=300,
+        description=(
+            "Sliding window (seconds) used by the active-users gauge — a user "
+            "is counted as active when they hit an instrumented endpoint within "
+            "this window. 5-minute default matches Grafana 'now-5m' panels."
+        ),
+    )
+    sentry_dsn: str = Field(
+        default="",
+        description="Sentry DSN — leave empty to disable Sentry initialisation.",
+    )
+    sentry_environment: str = Field(
+        default="",
+        description="Sentry environment tag; falls back to app_env when empty.",
+    )
+    sentry_traces_sample_rate: float = Field(
+        default=0.1,
+        description="Tracing sample rate for Sentry (0..1).",
+    )
+    sentry_profiles_sample_rate: float = Field(
+        default=0.0,
+        description="Profiling sample rate for Sentry (0..1); 0 disables profiling.",
+    )
+    sentry_release: str = Field(
+        default="",
+        description="Release tag forwarded to Sentry; defaults to the app version when empty.",
+    )
+
     @property
     def sync_database_url(self) -> str:
         """Alembic offline mode wants a sync-compatible URL."""
