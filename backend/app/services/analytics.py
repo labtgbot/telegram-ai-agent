@@ -17,13 +17,12 @@ from __future__ import annotations
 
 import csv
 import io
-from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal, cast
 
-from sqlalchemy import and_, case, func, literal, or_, select, text
+from sqlalchemy import and_, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger

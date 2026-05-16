@@ -15,13 +15,13 @@ All routes are gated by ``get_current_admin`` (``analyst`` and above).
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.auth.dependencies import SessionDep, get_current_admin
 from app.core.logging import get_logger

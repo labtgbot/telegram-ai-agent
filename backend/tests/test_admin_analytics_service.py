@@ -30,9 +30,7 @@ from app.models.token_usage_log import TokenUsageLog
 from app.models.transaction import Transaction
 from app.models.user import User
 from app.services.analytics import (
-    DEFAULT_RETENTION_WEEKS,
     FUNNEL_STAGES,
-    FunnelStage,
     InvalidRangeError,
     UnsupportedGroupingError,
     _build_funnel,
