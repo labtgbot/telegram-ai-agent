@@ -1,0 +1,22 @@
+# Preview Service for blue/green rollouts — Argo Rollouts swaps the
+# selector to the new ReplicaSet before promoting traffic to the active
+# Service. Apply once per environment that runs blue/green.
+apiVersion: v1
+kind: Service
+metadata:
+  name: telegram-ai-agent-backend-preview
+  namespace: tgai-prod
+  labels:
+    app.kubernetes.io/part-of: telegram-ai-agent
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: telegram-ai-agent
+    app.kubernetes.io/instance: telegram-ai-agent
+    app.kubernetes.io/component: backend
