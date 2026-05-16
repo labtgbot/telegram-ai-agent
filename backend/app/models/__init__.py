@@ -3,6 +3,7 @@
 Importing this package registers every table on the shared ``Base.metadata``,
 which is what Alembic introspects in ``env.py``.
 """
+from app.models.admin_audit_log import AdminAuditLog
 from app.models.admin_setting import AdminSetting
 from app.models.base import Base
 from app.models.chat_history import ChatMessage, ChatThread
@@ -15,6 +16,7 @@ from app.models.user import User
 from app.models.video_job import VideoJob
 
 __all__ = [
+    "AdminAuditLog",
     "AdminSetting",
     "Base",
     "ChatMessage",
