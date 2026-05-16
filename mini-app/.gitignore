@@ -5,6 +5,9 @@ dist-ssr
 coverage
 .vite
 *.tsbuildinfo
+playwright-report
+test-results
+playwright/.cache
 
 # Editor
 .vscode/*
