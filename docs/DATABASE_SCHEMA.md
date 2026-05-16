@@ -124,6 +124,26 @@ CREATE TABLE daily_analytics (
 );
 ```
 
+### daily_bonus_claims
+```sql
+CREATE TABLE daily_bonus_claims (
+    id              BIGSERIAL PRIMARY KEY,
+    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    claim_date      DATE NOT NULL,                       -- UTC calendar day
+    streak_day      INTEGER NOT NULL,                    -- 1-indexed position in ladder
+    amount          INTEGER NOT NULL,                    -- tokens credited
+    transaction_id  BIGINT REFERENCES transactions(id),  -- credit row (NULL-able for back-fills)
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_daily_bonus_user_date UNIQUE (user_id, claim_date)
+);
+
+CREATE INDEX ix_daily_bonus_user_id        ON daily_bonus_claims(user_id);
+CREATE INDEX ix_daily_bonus_user_date_desc ON daily_bonus_claims(user_id, claim_date);
+```
+
+One row per successful claim. The `UNIQUE(user_id, claim_date)` constraint is the second layer of the daily-bonus idempotency stack (see `docs/TOKEN_ECONOMY.md > Daily Bonus & Streak`) — racing requests that pass the service-level guard collide here as an `IntegrityError`, which the service converts into `AlreadyClaimedError`. Reading the user's most recent row is enough to recover the active streak, so the service never re-scans the ledger to derive the next reward.
+
 ### subscriptions
 ```sql
 CREATE TABLE subscriptions (
@@ -148,3 +168,4 @@ CREATE INDEX idx_sub_user ON subscriptions(user_id);
 - `users.token_balance >= 0` (constraint в коде, не в БД, чтобы возвращать понятную ошибку).
 - Каждая запись в `token_usage_logs` сопровождается транзакцией типа `spend`.
 - Покупка: одна транзакция `purchase` ↔ одно `successful_payment` от Telegram.
+- Daily bonus: одна строка `daily_bonus_claims(user_id, claim_date)` ↔ одна транзакция `bonus` с `payment_id = "daily_bonus:user:<id>:date:<YYYY-MM-DD>"`.

@@ -54,6 +54,25 @@ export interface ReferralSummary {
   referral_link: string;
 }
 
+export interface DailyBonusStatus {
+  available: boolean;
+  enabled: boolean;
+  streak_day: number;
+  next_amount: number;
+  last_claim_date: string | null;
+  next_available_at: string;
+  amounts: number[];
+}
+
+export interface DailyBonusClaim {
+  amount: number;
+  streak_day: number;
+  new_balance: number;
+  transaction_id: number;
+  claim_date: string;
+  next_available_at: string;
+}
+
 export function normalizeServiceType(value: string | null | undefined): ServiceType {
   if (!value) return "other";
   const lower = value.toLowerCase();

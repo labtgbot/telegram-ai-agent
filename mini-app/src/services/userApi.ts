@@ -1,6 +1,8 @@
 import { apiClient, ApiError } from "@/services/apiClient";
 import type { ApiClient } from "@/services/apiClient";
 import type {
+  DailyBonusClaim,
+  DailyBonusStatus,
   DataExportRequest,
   DataExportResponse,
   DeleteAccountResponse,
@@ -42,6 +44,14 @@ export class UserApi {
 
   getReferralSummary(): Promise<ReferralSummary> {
     return this.client.get<ReferralSummary>("/user/referral");
+  }
+
+  getDailyBonusStatus(): Promise<DailyBonusStatus> {
+    return this.client.get<DailyBonusStatus>("/user/daily-bonus");
+  }
+
+  claimDailyBonus(): Promise<DailyBonusClaim> {
+    return this.client.post<DailyBonusClaim>("/user/daily-bonus");
   }
 }
 

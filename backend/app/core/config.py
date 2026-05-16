@@ -83,6 +83,18 @@ class Settings(BaseSettings):
             "completes their first purchase."
         ),
     )
+    daily_bonus_enabled: bool = Field(
+        default=True,
+        description="Master switch for the daily-bonus retention loop.",
+    )
+    daily_bonus_amounts: str = Field(
+        default="10,12,15,20",
+        description=(
+            "Comma-separated ladder of daily-bonus amounts indexed by streak "
+            "day (1, 2, 3, …).  The last value is reused for every "
+            "subsequent consecutive day, so the default caps at 20 tokens."
+        ),
+    )
     telegram_set_commands_on_startup: bool = Field(
         default=True,
         description="Call setMyCommands when the FastAPI app starts (skipped without token).",
@@ -179,6 +191,28 @@ class Settings(BaseSettings):
         if not raw:
             return ()
         return tuple(chunk.strip() for chunk in raw.split(",") if chunk.strip())
+
+    @property
+    def daily_bonus_ladder(self) -> tuple[int, ...]:
+        """Parse :attr:`daily_bonus_amounts` into a tuple of positive ints.
+
+        Empty / malformed values fall back to ``(10,)`` so the loop is
+        always operational; misconfiguration in production logs a
+        warning at service-load time (see ``daily_bonus.py``).
+        """
+        raw = (self.daily_bonus_amounts or "").strip()
+        out: list[int] = []
+        for chunk in raw.split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            try:
+                value = int(chunk)
+            except ValueError:
+                continue
+            if value > 0:
+                out.append(value)
+        return tuple(out) if out else (10,)
 
     @property
     def super_admin_ids(self) -> set[int]:
