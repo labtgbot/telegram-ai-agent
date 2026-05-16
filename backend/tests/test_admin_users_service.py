@@ -79,12 +79,14 @@ async def test_list_users_returns_pagination(db_session):
     b = await _make_user(db_session, username="bob")
     c = await _make_user(db_session, username="carol")
 
-    page = await list_users(db_session, page=1, limit=2, sort="telegram_id", direction="asc")
+    # Sort descending so the three users we just created (highest telegram_ids)
+    # land on page 1, even if the test database already has older fixtures.
+    page = await list_users(db_session, page=1, limit=2, sort="telegram_id", direction="desc")
     ids = [u.id for u in page.items]
     assert len(page.items) == 2
     assert page.total >= 3
     assert page.has_more is True
-    assert a.id in ids or b.id in ids or c.id in ids
+    assert {a.id, b.id, c.id} & set(ids)
 
 
 @pytest.mark.asyncio
