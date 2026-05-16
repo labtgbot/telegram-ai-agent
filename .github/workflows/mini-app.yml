@@ -1,0 +1,80 @@
+name: Mini App
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mini-app/**"
+      - ".github/workflows/mini-app.yml"
+  pull_request:
+    paths:
+      - "mini-app/**"
+      - ".github/workflows/mini-app.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+    working-directory: mini-app
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  build:
+    name: Lint, typecheck, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect package.json
+        id: detect
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ -f mini-app/package.json ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Mini App::No mini-app/package.json yet — skipping lint/typecheck/build."
+          fi
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        if: steps.detect.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mini-app/package-lock.json
+
+      - name: Install dependencies
+        if: steps.detect.outputs.ready == 'true'
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: ESLint
+        if: steps.detect.outputs.ready == 'true'
+        run: npm run lint --if-present
+
+      - name: Type-check
+        if: steps.detect.outputs.ready == 'true'
+        run: npm run typecheck --if-present
+
+      - name: Build
+        if: steps.detect.outputs.ready == 'true'
+        run: npm run build --if-present
+
+      - name: Upload build artifact
+        if: steps.detect.outputs.ready == 'true' && hashFiles('mini-app/dist/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-app-dist
+          path: mini-app/dist
+          if-no-files-found: ignore

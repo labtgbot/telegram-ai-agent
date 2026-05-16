@@ -1,0 +1,83 @@
+name: Admin Dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "admin-dashboard/**"
+      - ".github/workflows/admin.yml"
+  pull_request:
+    paths:
+      - "admin-dashboard/**"
+      - ".github/workflows/admin.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+    working-directory: admin-dashboard
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  build:
+    name: Lint, typecheck, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect package.json
+        id: detect
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ -f admin-dashboard/package.json ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Admin Dashboard::No admin-dashboard/package.json yet — skipping lint/typecheck/build."
+          fi
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        if: steps.detect.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: admin-dashboard/package-lock.json
+
+      - name: Install dependencies
+        if: steps.detect.outputs.ready == 'true'
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: ESLint
+        if: steps.detect.outputs.ready == 'true'
+        run: npm run lint --if-present
+
+      - name: Type-check
+        if: steps.detect.outputs.ready == 'true'
+        run: npm run typecheck --if-present
+
+      - name: Build
+        if: steps.detect.outputs.ready == 'true'
+        run: npm run build --if-present
+
+      - name: Upload build artifact
+        if: steps.detect.outputs.ready == 'true' && hashFiles('admin-dashboard/.next/**', 'admin-dashboard/dist/**', 'admin-dashboard/build/**') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-dashboard-build
+          path: |
+            admin-dashboard/.next
+            admin-dashboard/dist
+            admin-dashboard/build
+          if-no-files-found: ignore
