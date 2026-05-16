@@ -33,6 +33,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.core.metrics import observe_spend
 from app.models.token_usage_log import TokenUsageLog
 from app.models.transaction import Transaction
 from app.models.user import User
@@ -348,6 +349,7 @@ class TokenService:
             new_balance=user.token_balance,
             meta=meta or None,
         )
+        observe_spend(service=service, tokens=amount)
         return SpendResult(
             user_id=user.id,
             amount=amount,

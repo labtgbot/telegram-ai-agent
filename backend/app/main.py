@@ -19,7 +19,9 @@ from app.bot.commands import set_bot_commands
 from app.core.config import get_settings
 from app.core.database import get_engine
 from app.core.logging import configure_logging, get_logger
+from app.core.metrics import setup_metrics
 from app.core.redis import close_redis
+from app.core.sentry import init_sentry
 
 
 @asynccontextmanager
@@ -64,6 +66,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings)
+    init_sentry(settings)
 
     app = FastAPI(
         title="Telegram AI Agent Backend",
@@ -71,6 +74,8 @@ def create_app() -> FastAPI:
         debug=settings.app_debug,
         lifespan=lifespan,
     )
+
+    setup_metrics(app, settings)
 
     app.include_router(v1_router, prefix=settings.api_v1_prefix)
 
