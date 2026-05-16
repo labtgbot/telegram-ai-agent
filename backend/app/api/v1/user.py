@@ -3,24 +3,33 @@
 * ``GET /api/v1/user/balance`` — current token balance and premium status.
 * ``GET /api/v1/user/usage-history`` — paginated debit history.
 * ``GET /api/v1/user/referral`` — referral code, link and rewards summary.
+* ``GET /api/v1/user/daily-bonus`` — claim status + streak preview.
+* ``POST /api/v1/user/daily-bonus`` — credit today's bonus (idempotent per UTC day).
 
 All endpoints require a valid ``X-Telegram-Init-Data`` header (handled by
 :func:`app.auth.dependencies.get_current_user_from_init_data`).
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import date, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
+from redis.asyncio import Redis
 from sqlalchemy import func, select
 
 from app.auth.dependencies import SessionDep, get_current_user_from_init_data
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.redis import get_redis
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.services.daily_bonus import (
+    AlreadyClaimedError,
+    DailyBonusDisabledError,
+    DailyBonusService,
+)
 from app.services.payments import REFERRAL_BONUS_PACKAGE
 from app.services.token_service import TokenService, UserNotFoundError
 
@@ -28,7 +37,11 @@ router = APIRouter(prefix="/user", tags=["user"])
 logger = get_logger(__name__)
 
 
-_DAILY_BONUS_PACKAGE = "daily_bonus"
+def _redis_dep() -> Redis:
+    return get_redis()
+
+
+RedisDep = Annotated[Redis, Depends(_redis_dep)]
 
 
 class BalanceResponse(BaseModel):
@@ -63,6 +76,29 @@ class ReferralResponse(BaseModel):
     referral_link: str
 
 
+class DailyBonusStatusResponse(BaseModel):
+    """Snapshot of the user's daily-bonus state for the claim card."""
+
+    available: bool
+    enabled: bool
+    streak_day: int
+    next_amount: int
+    last_claim_date: date | None = None
+    next_available_at: datetime
+    amounts: list[int]
+
+
+class DailyBonusClaimResponse(BaseModel):
+    """Successful daily-bonus credit — mirrors the service result."""
+
+    amount: int
+    streak_day: int
+    new_balance: int
+    transaction_id: int
+    claim_date: date
+    next_available_at: datetime
+
+
 def _build_referral_link(bot_username: str, referral_code: str) -> str:
     if not bot_username:
         return f"start=REF:{referral_code}"
@@ -92,21 +128,13 @@ async def _sum_referral_bonus(session: SessionDep, user_id: int) -> int:
     return int(total or 0)
 
 
-async def _daily_bonus_available(session: SessionDep, user_id: int) -> bool:
-    """Return ``True`` if the user has not claimed a daily bonus today (UTC)."""
-    cutoff = datetime.now(UTC) - timedelta(hours=24)
-    stmt = (
-        select(Transaction.id)
-        .where(
-            Transaction.user_id == user_id,
-            Transaction.transaction_type == "bonus",
-            Transaction.package_name == _DAILY_BONUS_PACKAGE,
-            Transaction.created_at >= cutoff,
-        )
-        .limit(1)
-    )
-    last = (await session.execute(stmt)).scalar_one_or_none()
-    return last is None
+async def _daily_bonus_available(
+    session: SessionDep, redis: Redis, user_id: int
+) -> bool:
+    """Return ``True`` if the user can claim a daily bonus right now (UTC day)."""
+    service = DailyBonusService(session, redis)
+    status_ = await service.status(user_id)
+    return status_.available
 
 
 @router.get(
@@ -116,6 +144,7 @@ async def _daily_bonus_available(session: SessionDep, user_id: int) -> bool:
 )
 async def get_balance(
     session: SessionDep,
+    redis: RedisDep,
     user: Annotated[User, Depends(get_current_user_from_init_data)],
 ) -> BalanceResponse:
     service = TokenService(session)
@@ -127,7 +156,7 @@ async def get_balance(
         token_balance=balance,
         is_premium=bool(user.is_premium),
         premium_expires_at=user.premium_expires_at,
-        daily_bonus_available=await _daily_bonus_available(session, user.id),
+        daily_bonus_available=await _daily_bonus_available(session, redis, user.id),
     )
 
 
@@ -185,4 +214,81 @@ async def get_referral(
             settings.telegram_bot_username,
             user.referral_code,
         ),
+    )
+
+
+@router.get(
+    "/daily-bonus",
+    response_model=DailyBonusStatusResponse,
+    summary="Daily-bonus claim status and streak preview",
+)
+async def get_daily_bonus_status(
+    session: SessionDep,
+    redis: RedisDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> DailyBonusStatusResponse:
+    service = DailyBonusService(session, redis)
+    snapshot = await service.status(user.id)
+    return DailyBonusStatusResponse(
+        available=snapshot.available,
+        enabled=snapshot.enabled,
+        streak_day=snapshot.streak_day,
+        next_amount=snapshot.next_amount,
+        last_claim_date=snapshot.last_claim_date,
+        next_available_at=snapshot.next_available_at,
+        amounts=list(snapshot.amounts),
+    )
+
+
+@router.post(
+    "/daily-bonus",
+    response_model=DailyBonusClaimResponse,
+    summary="Claim today's daily bonus (UTC; once per day per user)",
+)
+async def claim_daily_bonus(
+    session: SessionDep,
+    redis: RedisDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> DailyBonusClaimResponse:
+    service = DailyBonusService(session, redis)
+    try:
+        result = await service.claim(user.id)
+    except AlreadyClaimedError as exc:
+        # 409 — same UTC day; surface the wall-clock the client can use
+        # to disable the button until midnight UTC.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "daily_bonus_already_claimed",
+                "next_available_at": exc.next_available_at.isoformat(),
+            },
+        ) from exc
+    except DailyBonusDisabledError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="daily_bonus_disabled",
+        ) from exc
+    except UserNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="user_not_found",
+        ) from exc
+
+    try:
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001 — surface a clean 500
+        await session.rollback()
+        logger.exception("daily_bonus.commit_failed", error=str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="commit_failed",
+        ) from exc
+
+    return DailyBonusClaimResponse(
+        amount=result.amount,
+        streak_day=result.streak_day,
+        new_balance=result.new_balance,
+        transaction_id=result.transaction_id,
+        claim_date=result.claim_date,
+        next_available_at=result.next_available_at,
     )

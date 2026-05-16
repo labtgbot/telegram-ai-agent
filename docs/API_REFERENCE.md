@@ -32,6 +32,60 @@ Base URL: `/api/v1`.
 }
 ```
 
+### GET /user/daily-bonus
+
+Snapshot for the Mini App's claim card. Read-only; safe to call on every
+home-page render.
+
+```json
+{
+  "available": true,
+  "enabled": true,
+  "streak_day": 2,
+  "next_amount": 15,
+  "last_claim_date": "2026-05-15",
+  "next_available_at": "2026-05-17T00:00:00+00:00",
+  "amounts": [10, 12, 15, 20]
+}
+```
+
+- `available` — `true` if the user can claim **right now** (UTC day).
+- `streak_day` — current persisted streak (0 for a brand-new user, ≥1 after
+  at least one claim).
+- `next_amount` — what the *next* successful claim will credit.
+- `next_available_at` — the next UTC midnight at which the cooldown lifts.
+- `amounts` — the active ladder (admin override or env default).
+
+### POST /user/daily-bonus
+
+Credits today's bonus (idempotent per UTC day). Streak grows when the previous
+claim was *yesterday*; otherwise it resets to day 1. The ladder defaults to
+`10 → 12 → 15 → 20` (capped at the last value).
+
+Response (`200`):
+```json
+{
+  "amount": 15,
+  "streak_day": 3,
+  "new_balance": 615,
+  "transaction_id": 9123,
+  "claim_date": "2026-05-16",
+  "next_available_at": "2026-05-17T00:00:00+00:00"
+}
+```
+
+| HTTP | `detail` | Trigger |
+|------|----------|---------|
+| 401  | `invalid_init_data` / `missing_init_data` | Missing/forged init-data header |
+| 403  | `daily_bonus_disabled` | Master switch is off (env or `admin_settings.daily_bonus.enabled = false`) |
+| 404  | `user_not_found` | Authenticated user vanished mid-request |
+| 409  | `{"code": "daily_bonus_already_claimed", "next_available_at": "…"}` | Already claimed today |
+
+Idempotency: even with two parallel requests, exactly one credit is recorded
+(`transactions.payment_id = "daily_bonus:user:<id>:date:<YYYY-MM-DD>"`) and
+the duplicate insert into `daily_bonus_claims` is rejected by the
+`(user_id, claim_date)` UNIQUE constraint.
+
 ## Payment Endpoints
 
 Implemented in Phase 2 (`backend/app/api/v1/payment.py`). Both endpoints require `X-Telegram-Init-Data`; the caller is identified by the signed payload, so no `user_id` is taken from the request body.

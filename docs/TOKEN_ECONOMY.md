@@ -29,7 +29,9 @@ TOKEN_CONSUMPTION = {
 - Регистрация: +50 токенов.
 - Первая покупка: +20% к токенам.
 - Реферал: +100 токенов за каждого приглашенного.
-- Ежедневный бонус: +10 токенов при заходе в бота.
+- Ежедневный бонус: лестница `10 → 12 → 15 → 20` (cap), сбрасывается при
+  пропуске UTC-дня. Конфигурируется через CRM (`admin_settings.daily_bonus.amounts`
+  или env `DAILY_BONUS_AMOUNTS`). Подробности — раздел «Daily Bonus & Streak» ниже.
 
 ## Transactions
 
@@ -107,7 +109,7 @@ service = TokenService(session)
 }
 ```
 
-`daily_bonus_available` — `true`, если за последние 24 часа не было транзакции `transaction_type="bonus"` и `package_name="daily_bonus"`.
+`daily_bonus_available` — `true`, если пользователь ещё не получал бонус **сегодня (UTC)**. Источник истины — `DailyBonusService.status` (см. раздел «Daily Bonus & Streak»).
 
 ### `GET /api/v1/user/usage-history?page=1&limit=20`
 
@@ -160,3 +162,50 @@ async def reconcile_daily() -> None:
 ```
 
 Сама регистрация задачи в Beat-расписании добавляется в Phase 2, когда поднимается воркер. Логика проверки уже стабильна и покрыта тестами.
+
+## Daily Bonus & Streak
+
+Реализация — `backend/app/services/daily_bonus.py` (`DailyBonusService`). Сервис строит retention-петлю «зайди ещё раз»: бонус начисляется не чаще одного раза в UTC-сутки, а размер растёт по лестнице, пока пользователь возвращается каждый день.
+
+### Бизнес-правила
+
+- **Окно сброса** — UTC-день (`date.today()` в UTC). Полночь UTC одновременна для всех пользователей и не зависит от часового пояса клиента.
+- **Лестница** — кортеж положительных целых, по умолчанию `(10, 12, 15, 20)`; индекс берётся как `min(streak_day - 1, len(amounts) - 1)`, поэтому последний шаг — это «потолок» бонуса.
+- **Прогресс стрика**:
+  - первый claim → `streak_day = 1`,
+  - предыдущий claim был **вчера** (UTC) → `streak_day = prev + 1`,
+  - любой другой случай (пропуск ≥ 1 дня) → стрик обнуляется и снова стартует с 1.
+- **Master switch** — флаг `daily_bonus.enabled` (admin_settings) или `DAILY_BONUS_ENABLED=false` останавливает выдачу: `claim` бросает `DailyBonusDisabledError`, `status` возвращает `enabled=false, available=false`.
+
+### Источники истины
+
+- **DB** — `daily_bonus_claims` (одна строка на каждый успешный claim). Поле `streak_day` хранит позицию в лестнице, `transaction_id` ссылается на запись в `transactions` (`transaction_type='bonus'`, `package_name='daily_bonus'`).
+- **Redis** — горячий кеш по ключу `daily_bonus:user:{id}` (TTL 48ч). Хранит `{claim_date, streak_day}` последнего успешного claim'а. Кеш — best-effort: ошибки чтения/записи логируются и не валят запрос; DB остаётся ground truth при cache miss.
+- **transactions** — каждый бонус виден как любое другое начисление; `payment_id = "daily_bonus:user:<id>:date:<YYYY-MM-DD>"` нужен для дедупликации (см. ниже).
+
+### Идемпотентность (три слоя)
+
+| # | Слой | Что ловит |
+|---|------|-----------|
+| 1 | Service guard | Перед списанием сервис читает последнюю запись (Redis → DB). Если `claim_date == today`, сразу `AlreadyClaimedError`. Покрывает «нажал два раза подряд». |
+| 2 | DB UNIQUE | `daily_bonus_claims (user_id, claim_date)` — `IntegrityError` при гонке двух потоков; сервис ловит, откатывает транзакцию и возвращает `AlreadyClaimedError`. |
+| 3 | Payment marker | Уникальный частичный индекс по `transactions.payment_id` (миграция `0003_payment_idempotency`) дополнительно блокирует дубль на уровне ledger. |
+
+Все три уровня дают `next_available_at = следующая_полночь UTC`, чтобы клиент мог отрисовать корректный countdown.
+
+### CRM-конфигурация
+
+Без релиза можно поменять:
+
+| Ключ `admin_settings.setting_key` | Тип | Значение |
+|-----------------------------------|------|----------|
+| `daily_bonus.enabled` | `bool` (или объект `{"enabled": true}`) | Master switch. `false` → `claim` отдаёт `403 daily_bonus_disabled`. |
+| `daily_bonus.amounts` | `list[int]` (или объект `{"amounts": [...]}` или CSV `"10,12,15,20"`) | Лестница. Невалидные значения логируются (`daily_bonus.bad_amounts_override`) и заменяются на env-default. |
+
+Соответствующие env-фоллбеки — `DAILY_BONUS_ENABLED`, `DAILY_BONUS_AMOUNTS`. Чтение конфигурации устойчиво к ошибкам: исключение на `admin_settings` логируется и сервис продолжает работу со значениями из `Settings`.
+
+### Поверхности (UI/UX)
+
+- **REST** — `GET /api/v1/user/daily-bonus` (snapshot, безопасно дёргать на каждом ререндере), `POST /api/v1/user/daily-bonus` (атомарное списание + крепко идемпотентно). Полный контракт — `docs/API_REFERENCE.md`.
+- **Telegram-бот** — команда `/bonus` и кнопка «🎁 Daily bonus» в `main_menu`. Хэндлер живёт в `backend/app/bot/handlers.py::handle_bonus`, переиспользует `DailyBonusService`.
+- **Mini App** — компонент `mini-app/src/components/DailyBonusCard.tsx`, встроен в `HomePage`. Обрабатывает 409 (re-read status) и 403 (показывает «paused»).
