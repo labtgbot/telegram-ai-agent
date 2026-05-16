@@ -38,9 +38,9 @@ from app.auth.rbac import Role, require_role
 from app.core.logging import get_logger
 from app.models.user import User
 from app.services.admin_system import (
+    ASSIGNABLE_ROLES,
     AdminRoleChangeError,
     AdminUserRow,
-    ASSIGNABLE_ROLES,
     ComposioState,
     InvalidSettingPayloadError,
     MaintenanceState,

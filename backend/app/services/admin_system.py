@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.rbac import Role
@@ -34,8 +34,9 @@ from app.models.admin_setting import AdminSetting
 from app.models.user import User
 from app.services.rate_limit_config import (
     ADMIN_SETTING_KEY as RATE_LIMITS_KEY,
+)
+from app.services.rate_limit_config import (
     DEFAULT_RATE_LIMITS,
-    KNOWN_PLANS,
     merge_overrides,
 )
 
@@ -198,10 +199,7 @@ def _coerce_maintenance(raw: Any) -> MaintenanceState:
         return MaintenanceState(enabled=False, message=None, updated_at=None, updated_by=None)
     enabled = bool(raw.get("enabled"))
     message = raw.get("message")
-    if isinstance(message, str):
-        message = message.strip() or None
-    else:
-        message = None
+    message = (message.strip() or None) if isinstance(message, str) else None
     return MaintenanceState(
         enabled=enabled,
         message=message,
