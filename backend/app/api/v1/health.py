@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Literal
 
 from fastapi import APIRouter, status
@@ -50,7 +51,8 @@ async def _check_redis(timeout: float) -> ComponentStatus:
     try:
         client = get_redis()
         async with asyncio.timeout(timeout):
-            pong = await client.ping()
+            ping_result = client.ping()
+            pong = await ping_result if inspect.isawaitable(ping_result) else ping_result
         if not pong:
             return ComponentStatus(status="error", error="ping returned falsy")
         return ComponentStatus(status="ok")
