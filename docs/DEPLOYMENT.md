@@ -315,13 +315,54 @@ Release tags follow `vMAJOR.MINOR.PATCH`. Pre-releases (`v1.2.0-rc.1`) flip
 
 ## 10. Monitoring & backups
 
+### 10.1 Monitoring
+
 - **Metrics**: scrape `/api/v1/health` and per-pod cAdvisor metrics with
   Prometheus; dashboards live in `deploy/observability/` (TBD).
 - **Errors**: Sentry DSN injected via the backend Secret.
 - **Logs**: structured JSON to stdout; ship with `fluent-bit` / vendor agent.
-- **DB**: daily snapshot + WAL archive to S3; RPO ≤ 1 h, RTO ≤ 30 min.
-- **Media**: served from object storage (`MEDIA_S3_BUCKET`); versioning on.
 - **Alerts**: route critical alerts to the on-call Telegram chat.
+
+### 10.2 Disaster recovery (DR)
+
+The complete DR runbook — bucket provisioning, WAL archiving, restore drills,
+scenario-by-scenario recovery procedures, RPO/RTO budgets and the quarterly
+verification schedule — lives in [`docs/BACKUP_RECOVERY.md`](./BACKUP_RECOVERY.md).
+
+Headline targets:
+
+| Asset       | RPO    | RTO     | Mechanism                                                              |
+|-------------|--------|---------|------------------------------------------------------------------------|
+| PostgreSQL  | ≤ 1 h  | ≤ 30 min| Daily `pg_dump` (custom format) + continuous WAL archiving to S3 (PITR)|
+| Redis       | ≤ 24 h | ≤ 10 min| Nightly `BGSAVE` RDB snapshot to S3                                    |
+| User media  | ≤ 24 h | ≤ 10 min| `aws s3 sync` to a separate region/bucket; versioning on               |
+
+What's wired up:
+
+- **Backup image** — `deploy/backup/Dockerfile`. Bundles `pg_dump`,
+  `redis-cli`, `awscli` and the helper scripts under
+  `deploy/backup/scripts/`.
+- **Helm jobs** — `deploy/helm/telegram-ai-agent/templates/backup/*.yaml`.
+  Enable with `--set backup.enabled=true` and the S3 destination block (see
+  `values-production.yaml`). Renders five `CronJob`s: postgres dump, redis
+  RDB, media sync, prune, and quarterly verify.
+- **Raw manifests** — `deploy/k8s/backup/` for non-Helm clusters.
+- **Compose fallback** — `docker/compose.backup.yml` layers a long-running
+  `backup-supervisor` (supercronic) on top of `docker/compose.prod.yml`.
+- **Encryption** — uploads enforce SSE-KMS when `BACKUP_KMS_KEY_ID` is set,
+  otherwise SSE-S3 (`AES256`). Plaintext uploads are refused.
+- **Retention** — `BACKUP_RETENTION_DAYS` (default `30`) for full backups;
+  `BACKUP_WAL_RETENTION_DAYS` (default `7`) for WAL segments. Enforced both
+  by the daily prune CronJob and by the bucket-level S3 lifecycle policy
+  documented in the runbook.
+- **Restore drills** — `verify-backup.sh` restores the latest dump into an
+  ephemeral `backup_verify` database, smoke-tests the tables listed in
+  `BACKUP_SMOKE_TABLES`, and tears the DB down. Scheduled quarterly
+  (`0 6 1 1,4,7,10 *`) via the `tgai-backup-verify` CronJob.
+
+For day-to-day operational commands (kick off an ad-hoc backup, restore a
+specific dump, recover from a corrupted Postgres volume, etc.) jump straight
+into [`docs/BACKUP_RECOVERY.md`](./BACKUP_RECOVERY.md).
 
 ---
 

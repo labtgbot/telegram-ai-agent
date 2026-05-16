@@ -1,0 +1,28 @@
+# Non-secret backup configuration.
+#
+# Copy to configmap.yaml, fill in the bucket / hosts for your environment,
+# and `kubectl apply`. Secrets (AWS creds, passwords) live in a separate
+# Secret — see secret.example.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: telegram-ai-agent-backup-config
+  namespace: tgai-backup
+  labels:
+    app.kubernetes.io/part-of: telegram-ai-agent
+    app.kubernetes.io/component: backup
+data:
+  BACKUP_S3_BUCKET: "tgai-prod-backups"
+  BACKUP_S3_REGION: "eu-central-1"
+  # BACKUP_S3_ENDPOINT: "https://s3.example.com"   # MinIO / R2 / DO Spaces
+  BACKUP_KMS_KEY_ID: "alias/tgai-prod-backups"
+  BACKUP_RETENTION_DAYS: "30"
+  BACKUP_WAL_RETENTION_DAYS: "7"
+  PGHOST: "postgres.tgai-prod.svc.cluster.local"
+  PGPORT: "5432"
+  PGUSER: "tgai_backup"
+  PGDATABASE: "telegram_ai_agent"
+  REDIS_HOST: "redis.tgai-prod.svc.cluster.local"
+  REDIS_PORT: "6379"
+  MEDIA_S3_BUCKET: "tgai-prod-media"
+  BACKUP_SMOKE_TABLES: "users,bot_messages"

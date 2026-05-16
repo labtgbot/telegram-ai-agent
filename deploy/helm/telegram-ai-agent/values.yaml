@@ -230,3 +230,102 @@ ingress:
     # Leave secretName empty to let cert-manager generate the Secret using
     # the host as suffix. Set explicitly when reusing an existing certificate.
     secretName: ""
+
+# -----------------------------------------------------------------------------
+# Backup & Disaster Recovery.
+#
+# Off by default so the chart still installs cleanly on dev clusters that do
+# not have S3 credentials wired up. Enable per-environment (see
+# values-production.yaml). Refer to docs/BACKUP_RECOVERY.md for the full DR
+# runbook, RPO/RTO targets, and quarterly restore drill procedure.
+# -----------------------------------------------------------------------------
+backup:
+  enabled: false
+
+  image:
+    repository: backup
+    tag: ""        # falls back to .Values.image.tag, then Chart.AppVersion
+
+  # Shared S3 configuration. KMS encryption is enforced when kmsKeyId is set;
+  # SSE-S3 (AES256) is used otherwise. Plaintext uploads are never produced.
+  s3:
+    bucket: ""           # required when backup.enabled
+    region: ""           # e.g. eu-central-1
+    endpoint: ""         # optional — non-AWS S3 (MinIO, R2, etc.)
+    kmsKeyId: ""         # KMS key ARN/alias for SSE-KMS
+
+  # 30-day retention satisfies the Phase 4 acceptance criterion. WAL retention
+  # is tighter — the point-in-time recovery window we advertise is 7 days.
+  retentionDays: 30
+  walRetentionDays: 7
+
+  # Source database/redis coordinates. Defaults pick the in-cluster service
+  # names; override when targeting managed Postgres / managed Redis.
+  postgres:
+    enabled: true
+    host: postgres
+    port: 5432
+    database: telegram_ai_agent
+    user: postgres
+    # Schedule defaults: 02:00 UTC daily.
+    schedule: "0 2 * * *"
+    # WAL push is driven by the Postgres server's archive_command (managed
+    # service or the script in deploy/backup/scripts/postgres-wal-archive.sh
+    # bundled into a custom Postgres image). The chart only generates the
+    # daily logical dump CronJob; document the WAL flow but don't auto-create
+    # an archive sidecar (architecture varies too much per provider).
+    extraArgs: ""
+
+  redis:
+    enabled: true
+    host: redis
+    port: 6379
+    # Daily at 02:30 UTC — staggered to avoid Postgres burst.
+    schedule: "30 2 * * *"
+
+  media:
+    enabled: false
+    sourceBucket: ""      # set MEDIA_S3_BUCKET equivalent
+    sourcePrefix: ""
+    schedule: "0 3 * * *"
+    mirrorDeletes: false
+
+  prune:
+    enabled: true
+    schedule: "0 4 * * *"
+
+  # Quarterly restore drill. Default cron fires at 06:00 UTC on the 1st of
+  # Jan/Apr/Jul/Oct — adjust to your team's quarterly review cadence.
+  verify:
+    enabled: true
+    schedule: "0 6 1 1,4,7,10 *"
+    smokeTables: "users"
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Secret holding sensitive backup env vars: AWS credentials (when not using
+  # IRSA / workload identity), POSTGRES_PASSWORD, REDIS_PASSWORD, optional
+  # BACKUP_NOTIFY_WEBHOOK. Create out-of-band via sealed-secrets /
+  # external-secrets — the chart only references it by name.
+  secret:
+    name: telegram-ai-agent-backup
+    create: false
+    defaults:
+      AWS_ACCESS_KEY_ID: ""
+      AWS_SECRET_ACCESS_KEY: ""
+      PGPASSWORD: ""
+      REDIS_PASSWORD: ""
+      BACKUP_NOTIFY_WEBHOOK: ""
+
+  # Optional ServiceAccount with IRSA / workload-identity annotations for
+  # clusters that prefer not to mount static AWS creds.
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
