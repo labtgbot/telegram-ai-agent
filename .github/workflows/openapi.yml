@@ -1,0 +1,92 @@
+name: OpenAPI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/openapi.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/openapi.yml"
+  workflow_dispatch:
+  release:
+    types: [published]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  generate:
+    name: Generate openapi.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install backend
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "."
+
+      # Importing the FastAPI app triggers lifespan-independent settings
+      # validation; provide minimal placeholders so create_app() succeeds
+      # without hitting external services. The schema itself is
+      # deterministic regardless of these values.
+      - name: Export OpenAPI spec
+        working-directory: backend
+        env:
+          APP_ENV: ci
+          APP_DEBUG: "false"
+          SECRET_KEY: "ci-openapi-export-not-a-real-secret"
+          TELEGRAM_BOT_TOKEN: "0:CI-OPENAPI-EXPORT"
+          TELEGRAM_WEBHOOK_SECRET: "ci-openapi-export"
+          DATABASE_URL: "postgresql+asyncpg://postgres:postgres@localhost:5432/telegram_ai_agent"
+          REDIS_URL: "redis://localhost:6379/0"
+        run: |
+          python - <<'PY'
+          import json
+          from app.main import create_app
+
+          spec = create_app().openapi()
+          with open("openapi.json", "w", encoding="utf-8") as fh:
+              json.dump(spec, fh, indent=2, ensure_ascii=False, sort_keys=True)
+              fh.write("\n")
+          print(f"Wrote openapi.json with {len(spec.get('paths', {}))} paths")
+          PY
+
+      - name: Validate spec parses
+        working-directory: backend
+        run: python -c "import json; json.load(open('openapi.json'))"
+
+      - name: Upload openapi.json artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: openapi-spec
+          path: backend/openapi.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Attach openapi.json to GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            backend/openapi.json --clobber

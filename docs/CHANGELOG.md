@@ -14,6 +14,12 @@ empty section silently drops notes from the release page.
 
 ### Added
 
+- Documentation bundle (`docs/USER_GUIDE.md`, `docs/ADMIN_GUIDE.md`)
+  and a refreshed `docs/API_REFERENCE.md` that points at the OpenAPI
+  artifact for the machine-readable contract.
+- OpenAPI generation workflow (`.github/workflows/openapi.yml`) that
+  builds `backend/openapi.json` on every push and uploads it as a CI
+  artifact (also attached to release tags).
 - Launch checklist (`docs/LAUNCH_CHECKLIST.md`) mapping each Phase 4
   acceptance criterion to a concrete operator action.
 - BotFather configuration script (`scripts/configure_botfather.py`):

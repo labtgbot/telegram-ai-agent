@@ -12,6 +12,26 @@ targets:
 For local development see [`README.md`](../README.md) — this document covers
 staging + production only.
 
+## Contents
+
+1. [Environments](#1-environments)
+2. [Prerequisites](#2-prerequisites)
+3. [One-time bootstrap per environment](#3-one-time-bootstrap-per-environment)
+4. [Deploying](#4-deploying)
+5. [Database migrations](#5-database-migrations)
+6. [Smoke checks](#6-smoke-checks)
+7. [Rollback](#7-rollback)
+8. [Docker Compose fallback](#8-docker-compose-fallback)
+9. [CI/CD summary](#9-cicd-summary)
+10. [Monitoring & backups](#10-monitoring--backups)
+11. [Security checklist before going live](#11-security-checklist-before-going-live)
+
+> First production cutover? Walk
+> [`docs/LAUNCH_CHECKLIST.md`](LAUNCH_CHECKLIST.md) and
+> [`docs/PRODUCTION_DEPLOY.md`](PRODUCTION_DEPLOY.md) in parallel — this
+> runbook covers the mechanics; those documents cover the rollout
+> sequencing and gates.
+
 ---
 
 ## 1. Environments

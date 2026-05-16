@@ -1,11 +1,36 @@
-# API Reference (Draft)
+# API Reference
 
-Base URL: `/api/v1`.
+Base URL: `/api/v1` (configurable via `API_V1_PREFIX`).
+
+This document is curated alongside the **machine-readable OpenAPI spec**
+that FastAPI auto-generates from the codebase:
+
+| Form         | Where                                                              |
+|--------------|--------------------------------------------------------------------|
+| Swagger UI   | `https://bot.example.com/docs` (production), `http://localhost:8000/docs` |
+| Redoc        | `https://bot.example.com/redoc`                                    |
+| Raw JSON     | `https://bot.example.com/openapi.json`                             |
+| CI artifact  | `openapi.json` produced by `.github/workflows/openapi.yml` on every push, attached to release tags |
+
+To re-generate the spec offline:
+
+```bash
+cd backend
+python -c "import json; from app.main import create_app; \
+  print(json.dumps(create_app().openapi(), indent=2))" > openapi.json
+```
+
+If endpoint behaviour ever drifts from this Markdown, **the FastAPI
+spec is the source of truth** — open an issue or PR to bring this file
+back in sync.
 
 ## Authentication
 
 - User endpoints: `X-Telegram-Init-Data` header (signed by Telegram WebApp).
 - Admin endpoints: `Authorization: Bearer <admin_jwt>` + `X-Admin-ID`.
+- Bot webhook: `POST /api/v1/bot/webhook/{secret}` — secret rotated via
+  `TELEGRAM_WEBHOOK_SECRET`.
+- Health probes (`/health`, `/health/live`, `/health/ready`) are public.
 
 ## User Endpoints
 
@@ -179,4 +204,62 @@ KPI: users, revenue, tokens, usage.
 ### GET /admin/analytics/user-behavior
 ### POST /admin/broadcast
 
-> Полная OpenAPI-спецификация будет автогенерироваться FastAPI (`/docs`).
+### GET /admin/transactions
+Filterable ledger; `?status`, `?type`, `?date_from`, `?date_to`, `?package`.
+
+### POST /admin/transactions/{id}/retry-webhook
+Idempotently re-finalises a `pending` Stars payment by replaying the
+existing webhook dispatcher.
+
+### POST /admin/transactions/{id}/refund
+Issues `refundStarPayment` upstream + inserts a compensating row in
+`transactions`. Both actions land in `admin_audit_logs`.
+
+### GET /admin/analytics/funnel
+### GET /admin/analytics/retention?day=1|7|30
+### GET /admin/analytics/ltv
+### GET /admin/segments
+### POST /admin/segments
+### GET /admin/content/{kind}
+### PUT /admin/content/{kind}/{id}
+### GET /admin/settings
+### PUT /admin/settings/{key}
+### GET /admin/system/audit-log
+
+## Compliance & legal
+
+| Method | Path                          | Purpose                                                 |
+|--------|-------------------------------|---------------------------------------------------------|
+| `POST` | `/compliance/age-verify`      | One-shot age confirmation; sets `users.age_verified`.   |
+| `POST` | `/user/export`                | Async export of the caller's data; result posted to bot.|
+| `DELETE` | `/user/account`             | Schedules account deletion with a 30-day grace period.  |
+| `POST` | `/user/account/cancel-deletion` | Cancels a pending deletion within the grace window.  |
+
+Public legal text is served as Markdown by the app shell:
+`GET /privacy`, `GET /terms` (not under `/api/v1`).
+
+## Webhooks & health
+
+| Method | Path                              | Purpose                              |
+|--------|-----------------------------------|--------------------------------------|
+| `POST` | `/bot/webhook/{secret}`           | Telegram Bot API webhook entry-point |
+| `GET`  | `/health`                         | Full readiness (DB + Redis)          |
+| `GET`  | `/health/live`                    | Liveness probe                       |
+| `GET`  | `/health/ready`                   | Readiness probe                      |
+| `GET`  | `/metrics` *(when enabled)*       | Prometheus scrape target             |
+
+## Conventions
+
+- All requests/responses use `application/json` with UTF-8 unless
+  explicitly noted (Markdown for `/privacy` and `/terms`).
+- Timestamps are RFC 3339 in UTC (`2026-05-16T09:14:32Z`).
+- Error envelope: HTTP status + `{ "detail": "<code-or-message>" }`
+  (see per-endpoint tables for the registered `detail` codes).
+- Idempotency: `payment_id` and `transactions.payment_id` carry the
+  natural key for de-duplication (`invoice:<id>`, `daily_bonus:user:
+  <uid>:date:<YYYY-MM-DD>`, etc.).
+- Pagination: cursorless `?page=N&limit=M`, where `1 ≤ limit ≤ 100`.
+
+> For the complete, always-current schema (request models, response
+> models, validation errors), use the **OpenAPI spec** linked at the
+> top of this document.
