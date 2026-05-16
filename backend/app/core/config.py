@@ -46,11 +46,38 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = Field(
         default="",
-        description="Telegram bot token; used to verify WebApp initData HMAC.",
+        description="Telegram bot token; used for WebApp initData HMAC + Bot API calls.",
+    )
+    telegram_bot_username: str = Field(
+        default="",
+        description="Bot username (without @); embedded in referral links.",
+    )
+    telegram_api_base_url: str = Field(
+        default="https://api.telegram.org",
+        description="Telegram Bot API base URL (override for tests or self-hosted gateways).",
     )
     telegram_init_data_max_age: int = Field(
         default=86400,
         description="Maximum age (seconds) of WebApp initData accepted by the API.",
+    )
+    telegram_webhook_secret: str = Field(
+        default="",
+        description=(
+            "Secret value Telegram sends as 'X-Telegram-Bot-Api-Secret-Token'. "
+            "Empty disables verification (useful for local dev)."
+        ),
+    )
+    telegram_mini_app_url: str = Field(
+        default="",
+        description="HTTPS URL of the Mini App opened from inline keyboards.",
+    )
+    telegram_signup_bonus_tokens: int = Field(
+        default=50,
+        description="Tokens credited to every newly registered Telegram user.",
+    )
+    telegram_set_commands_on_startup: bool = Field(
+        default=True,
+        description="Call setMyCommands when the FastAPI app starts (skipped without token).",
     )
 
     admin_jwt_secret: str = Field(
