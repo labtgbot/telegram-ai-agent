@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tgai-redis-backup
+  namespace: tgai-backup
+  labels:
+    app.kubernetes.io/part-of: telegram-ai-agent
+    app.kubernetes.io/component: backup
+    backup.tgai/job: redis-rdb
+spec:
+  schedule: "30 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          serviceAccountName: telegram-ai-agent-backup
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            fsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: redis-backup
+              image: ghcr.io/labtgbot/telegram-ai-agent/backup:latest
+              imagePullPolicy: IfNotPresent
+              command: ["/opt/tgai/backup/redis-backup.sh"]
+              envFrom:
+                - configMapRef:
+                    name: telegram-ai-agent-backup-config
+                - secretRef:
+                    name: telegram-ai-agent-backup
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 384Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                - name: aws-cache
+                  mountPath: /home/nobody/.aws/cli
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            - name: aws-cache
+              emptyDir: {}
