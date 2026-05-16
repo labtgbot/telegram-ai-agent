@@ -1,15 +1,20 @@
 import { NavLink, Outlet } from "react-router-dom";
 
+import { useTranslation } from "@/i18n/useTranslation";
+import type { TranslationKey } from "@/i18n";
 import { useThemeStore } from "@/store/useThemeStore";
 
-const NAV_ITEMS: Array<{ to: string; label: string }> = [
-  { to: "/", label: "Home" },
-  { to: "/balance", label: "Balance" },
-  { to: "/settings", label: "Settings" },
+const NAV_ITEMS: ReadonlyArray<{ to: string; key: TranslationKey }> = [
+  { to: "/", key: "nav.home" },
+  { to: "/balance", key: "nav.balance" },
+  { to: "/profile", key: "nav.profile" },
+  { to: "/history", key: "nav.history" },
+  { to: "/settings", key: "nav.settings" },
 ];
 
 export function AppLayout(): JSX.Element {
   const scheme = useThemeStore((s) => s.scheme);
+  const { t } = useTranslation();
 
   return (
     <div className="flex min-h-screen flex-col bg-tg-bg text-tg-text">
@@ -37,12 +42,12 @@ export function AppLayout(): JSX.Element {
                 to={item.to}
                 end={item.to === "/"}
                 className={({ isActive }) =>
-                  `block px-4 py-3 text-center text-sm transition-colors ${
+                  `block px-2 py-3 text-center text-xs transition-colors ${
                     isActive ? "text-tg-link" : "text-tg-hint hover:text-tg-text"
                   }`
                 }
               >
-                {item.label}
+                {t(item.key)}
               </NavLink>
             </li>
           ))}

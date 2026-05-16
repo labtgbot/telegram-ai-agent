@@ -24,3 +24,19 @@ export interface TelegramThemeParams {
 }
 
 export type TelegramColorScheme = "light" | "dark";
+
+/**
+ * Subset of `WebApp.initDataUnsafe.user` we read on bootstrap.
+ *
+ * @see https://core.telegram.org/bots/webapps#webappuser
+ */
+export interface TelegramInitUser {
+  id: number;
+  is_bot?: boolean;
+  first_name?: string;
+  last_name?: string;
+  username?: string;
+  language_code?: string;
+  is_premium?: boolean;
+  photo_url?: string;
+}
