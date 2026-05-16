@@ -19,6 +19,7 @@ from app.bot.commands import BOT_COMMANDS
 from app.bot.keyboards import balance_actions, main_menu, referral_share
 from app.core.config import Settings
 from app.core.logging import get_logger
+from app.core.redis import get_redis
 from app.services.bot_users import register_or_update_user
 from app.services.composio import ComposioClient
 from app.services.image_generation import (
@@ -34,6 +35,22 @@ from app.services.payments import (
     InvoicePayloadInvalidError,
     PackageNotFoundError,
     PaymentService,
+)
+from app.services.text_generation import (
+    MODE_AGENT,
+    MODE_BASIC,
+    MODE_COST,
+    ConversationHistory,
+    DbConversationHistory,
+    InvalidMaxTokensError,
+    InvalidModeError,
+    InvalidTemperatureError,
+    RedisConversationHistory,
+    TextGenerationService,
+    TextProviderError,
+)
+from app.services.text_generation import (
+    InvalidPromptError as TextInvalidPromptError,
 )
 from app.services.token_service import (
     InsufficientTokensError,
@@ -582,6 +599,151 @@ async def handle_video(ctx: HandlerContext) -> None:
     )
 
 
+# ----------------------------------------------------------------- text chat
+
+
+_TELEGRAM_MESSAGE_LIMIT = 4096
+_TEXT_BODY_LIMIT = _TELEGRAM_MESSAGE_LIMIT - 256  # leave room for the cost footer
+
+
+def _parse_text_args(text: str | None) -> str | None:
+    """Extract the prompt that follows ``/ask`` (or ``/agent``)."""
+    if not text:
+        return None
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+    return parts[1].strip() or None
+
+
+def _build_chat_history(session: AsyncSession, user: Any) -> ConversationHistory:
+    """Pick the conversation-history backend for ``user``.
+
+    Premium users keep their bot history in the durable ``chat_threads``
+    /``chat_messages`` tables; everyone else gets a Redis-backed sliding
+    window so the bot stays cheap to operate.
+    """
+    if getattr(user, "is_premium", False):
+        return DbConversationHistory(session)
+    return RedisConversationHistory(get_redis())
+
+
+def _truncate_for_telegram(text: str, *, limit: int = _TEXT_BODY_LIMIT) -> str:
+    """Keep replies under Telegram's per-message 4096-char ceiling."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+async def _run_text_mode(ctx: HandlerContext, *, mode: str, label: str) -> None:
+    """Shared implementation for ``/ask`` and ``/agent``.
+
+    Mirrors :func:`handle_image` in shape: parse → lookup user → check
+    Composio → invoke service → translate errors → reply.  The bot
+    pins a per-chat ``thread_id`` so consecutive ``/ask`` calls inside
+    the same chat continue the conversation.
+    """
+    if ctx.chat_id is None or ctx.from_user is None:
+        return
+
+    prompt = _parse_text_args((ctx.message or {}).get("text"))
+    if not prompt:
+        cost = MODE_COST[mode]
+        await ctx.client.send_message(
+            ctx.chat_id,
+            (
+                f"🤖 <b>{label}</b>\n"
+                f"Usage: <code>/{ 'agent' if mode == MODE_AGENT else 'ask' } "
+                "&lt;question&gt;</code>\n\n"
+                f"Cost: <b>{cost}</b> tokens per message."
+            ),
+        )
+        return
+
+    user = await find_user_by_telegram_id(ctx.session, int(ctx.from_user["id"]))
+    if user is None:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "I don't recognise you yet — send /start to register.",
+        )
+        return
+
+    if ctx.composio is None:
+        logger.error("bot.text.composio_unconfigured", user_id=user.id, mode=mode)
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "AI chat is temporarily unavailable. Please try again later.",
+        )
+        return
+
+    history = _build_chat_history(ctx.session, user)
+    service = TextGenerationService(ctx.session, ctx.composio, history=history)
+    thread_id = f"tg:{ctx.chat_id}"
+    request_id = uuid.uuid4().hex
+
+    try:
+        result = await service.generate(
+            user_id=user.id,
+            prompt=prompt,
+            mode=mode,
+            thread_id=thread_id,
+            request_id=request_id,
+        )
+    except TextInvalidPromptError as exc:
+        await ctx.client.send_message(ctx.chat_id, f"❌ {exc}")
+        return
+    except (InvalidModeError, InvalidTemperatureError, InvalidMaxTokensError) as exc:
+        await ctx.client.send_message(ctx.chat_id, f"❌ {exc}")
+        return
+    except InsufficientTokensError as exc:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            (
+                "💸 Not enough tokens. "
+                f"Need <b>{exc.required}</b>, you have <b>{exc.available}</b>.\n"
+                "Tap /buy to top up."
+            ),
+        )
+        return
+    except UserNotFoundError:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "I don't recognise you yet — send /start to register.",
+        )
+        return
+    except TextProviderError as exc:
+        await ctx.session.rollback()
+        logger.warning(
+            "bot.text.provider_error",
+            user_id=user.id,
+            mode=mode,
+            error=str(exc),
+            provider_error=exc.provider_error,
+        )
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "🛠 The AI service is having trouble right now — please try again in a moment.",
+        )
+        return
+
+    body = _truncate_for_telegram(result.text)
+    footer = (
+        f"\n\n— <i>{label}</i> · Cost: <b>{result.tokens_spent}</b> "
+        f"tokens · Balance: <b>{result.new_balance}</b>"
+    )
+    await ctx.client.send_message(ctx.chat_id, body + footer)
+
+
+async def handle_ask(ctx: HandlerContext) -> None:
+    """``/ask <question>`` — quick basic-mode answer (1 token)."""
+    await _run_text_mode(ctx, mode=MODE_BASIC, label="AI chat")
+
+
+async def handle_agent(ctx: HandlerContext) -> None:
+    """``/agent <task>`` — autonomous-agent mode (10 tokens)."""
+    await _run_text_mode(ctx, mode=MODE_AGENT, label="AI agent")
+
+
 async def handle_profile(ctx: HandlerContext) -> None:
     if ctx.chat_id is None or ctx.from_user is None:
         return
@@ -654,7 +816,14 @@ async def handle_callback_query(ctx: HandlerContext) -> None:
         if ctx.chat_id is not None:
             await ctx.client.send_message(
                 ctx.chat_id,
-                "💬 Just type your question — AI chat lands in Phase 2.",
+                (
+                    "💬 <b>AI chat</b>\n"
+                    f"• <code>/ask &lt;question&gt;</code> — quick answer "
+                    f"(<b>{MODE_COST[MODE_BASIC]}</b> token)\n"
+                    f"• <code>/agent &lt;task&gt;</code> — autonomous agent "
+                    f"(<b>{MODE_COST[MODE_AGENT]}</b> tokens)\n\n"
+                    "Or just send me a message — I'll answer in basic mode."
+                ),
             )
         return
 
@@ -803,6 +972,8 @@ COMMAND_HANDLERS = {
     "help": handle_help,
     "balance": handle_balance,
     "buy": handle_buy,
+    "ask": handle_ask,
+    "agent": handle_agent,
     "image": handle_image,
     "video": handle_video,
     "profile": handle_profile,

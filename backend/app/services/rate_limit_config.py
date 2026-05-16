@@ -43,13 +43,14 @@ KNOWN_PLANS: Final[frozenset[str]] = frozenset(
 )
 
 # Canonical action codes. ``default`` is the catch-all bucket the dependency
-# uses when the caller doesn't specify ``image``/``video``/``voice``.
+# uses when the caller doesn't specify ``image``/``video``/``voice``/``text``.
 ACTION_DEFAULT: Final[str] = "default"
 ACTION_IMAGE: Final[str] = "image"
 ACTION_VIDEO: Final[str] = "video"
 ACTION_VOICE: Final[str] = "voice"
+ACTION_TEXT: Final[str] = "text"
 KNOWN_ACTIONS: Final[frozenset[str]] = frozenset(
-    {ACTION_DEFAULT, ACTION_IMAGE, ACTION_VIDEO, ACTION_VOICE}
+    {ACTION_DEFAULT, ACTION_IMAGE, ACTION_VIDEO, ACTION_VOICE, ACTION_TEXT}
 )
 
 
@@ -93,6 +94,7 @@ DEFAULT_RATE_LIMITS: Final[dict[str, dict[str, RateLimitRule]]] = {
         "image_per_day": _day(5),
         "video_per_day": _day(2),
         "voice_per_day": _day(10),
+        "text_per_day": _day(50),
     },
     PLAN_PREMIUM: {
         "per_hour": _hour(100),
@@ -100,6 +102,7 @@ DEFAULT_RATE_LIMITS: Final[dict[str, dict[str, RateLimitRule]]] = {
         "image_per_day": _day(50),
         "video_per_day": _day(20),
         "voice_per_day": _day(100),
+        "text_per_day": _day(500),
     },
     PLAN_PRO: {
         "per_hour": _hour(500),
@@ -107,18 +110,20 @@ DEFAULT_RATE_LIMITS: Final[dict[str, dict[str, RateLimitRule]]] = {
         "image_per_day": _day(200),
         "video_per_day": _day(100),
         "voice_per_day": _day(500),
+        "text_per_day": _day(2_000),
     },
 }
 
 
 # Which quota keys apply to a given action. ``default`` is always covered by
-# the universal counters; media actions additionally consume their dedicated
-# daily bucket.
+# the universal counters; media + text actions additionally consume their
+# dedicated daily bucket.
 ACTION_QUOTA_KEYS: Final[dict[str, tuple[str, ...]]] = {
     ACTION_DEFAULT: ("per_hour", "per_day"),
     ACTION_IMAGE: ("per_hour", "per_day", "image_per_day"),
     ACTION_VIDEO: ("per_hour", "per_day", "video_per_day"),
     ACTION_VOICE: ("per_hour", "per_day", "voice_per_day"),
+    ACTION_TEXT: ("per_hour", "per_day", "text_per_day"),
 }
 
 

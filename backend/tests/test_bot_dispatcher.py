@@ -96,15 +96,52 @@ async def test_dispatch_routes_unknown_command(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_routes_free_text(
-    settings, session_stub, client_stub
+async def test_dispatch_routes_free_text_to_ask(
+    settings, session_stub, client_stub, monkeypatch
 ) -> None:
+    """Non-empty free-form text is rewritten to ``/ask`` and delegated."""
+    from app.bot import dispatcher as dispatcher_module
+
+    called: list[dict[str, Any]] = []
+
+    async def fake_ask(ctx):  # type: ignore[no-untyped-def]
+        # Record the synthesised message so we can verify the prompt
+        # made it through unchanged.
+        called.append(dict(ctx.message or {}))
+
+    monkeypatch.setattr(dispatcher_module, "handle_ask", fake_ask)
+
     update = {
         "update_id": 2,
         "message": {
             "chat": {"id": 5},
             "from": {"id": 7},
             "text": "hello bot",
+        },
+    }
+    await dispatch_update(
+        update,
+        settings=settings,
+        client=client_stub,
+        session=session_stub,
+    )
+    assert called, "handle_ask was not invoked for free-form text"
+    assert called[0]["text"] == "/ask hello bot"
+    # No direct send_message — the synthetic /ask handler owns the reply.
+    client_stub.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_empty_free_text_prompts_help(
+    settings, session_stub, client_stub
+) -> None:
+    """Blank free-form text falls through to a help hint, not to /ask."""
+    update = {
+        "update_id": 6,
+        "message": {
+            "chat": {"id": 5},
+            "from": {"id": 7},
+            "text": "   ",
         },
     }
     await dispatch_update(
