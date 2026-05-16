@@ -151,6 +151,15 @@ const _en = {
     body: "Page not found.",
     cta: "Go home",
   },
+  consent: {
+    title: "We respect your data",
+    body: "We store a small amount of data on your device (preferences, language, session) so the Mini App works. With your consent we also collect aggregated usage analytics to improve the product. You can change your choice anytime in Settings.",
+    privacyLink: "Privacy Policy",
+    termsLink: "Terms of Service",
+    acceptAll: "Accept all",
+    necessaryOnly: "Necessary only",
+    learnMore: "Learn more:",
+  },
 } as const;
 
 type DeepStringify<T> = {
