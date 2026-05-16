@@ -29,6 +29,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     configure_logging(settings)
     logger = get_logger(__name__)
+    settings.assert_production_safe()
     logger.info(
         "app.startup",
         env=settings.app_env,
