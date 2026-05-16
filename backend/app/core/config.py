@@ -76,6 +76,13 @@ class Settings(BaseSettings):
         default=50,
         description="Tokens credited to every newly registered Telegram user.",
     )
+    telegram_referral_bonus_tokens: int = Field(
+        default=100,
+        description=(
+            "Tokens credited to a referrer when the user they invited "
+            "completes their first purchase."
+        ),
+    )
     telegram_set_commands_on_startup: bool = Field(
         default=True,
         description="Call setMyCommands when the FastAPI app starts (skipped without token).",

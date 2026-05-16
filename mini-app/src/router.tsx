@@ -6,6 +6,7 @@ import { BalancePage } from "@/pages/BalancePage";
 import { HistoryPage } from "@/pages/HistoryPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { ProfilePage } from "@/pages/ProfilePage";
+import { ReferralPage } from "@/pages/ReferralPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 
 export const router = createBrowserRouter([
@@ -17,6 +18,7 @@ export const router = createBrowserRouter([
       { path: "balance", element: <BalancePage /> },
       { path: "profile", element: <ProfilePage /> },
       { path: "history", element: <HistoryPage /> },
+      { path: "referral", element: <ReferralPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "*", element: <NotFoundPage /> },
     ],

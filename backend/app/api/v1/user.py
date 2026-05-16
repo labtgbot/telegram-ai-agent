@@ -2,8 +2,9 @@
 
 * ``GET /api/v1/user/balance`` — current token balance and premium status.
 * ``GET /api/v1/user/usage-history`` — paginated debit history.
+* ``GET /api/v1/user/referral`` — referral code, link and rewards summary.
 
-Both endpoints require a valid ``X-Telegram-Init-Data`` header (handled by
+All endpoints require a valid ``X-Telegram-Init-Data`` header (handled by
 :func:`app.auth.dependencies.get_current_user_from_init_data`).
 """
 from __future__ import annotations
@@ -13,12 +14,14 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.auth.dependencies import SessionDep, get_current_user_from_init_data
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.services.payments import REFERRAL_BONUS_PACKAGE
 from app.services.token_service import TokenService, UserNotFoundError
 
 router = APIRouter(prefix="/user", tags=["user"])
@@ -51,6 +54,42 @@ class UsageHistoryResponse(BaseModel):
     page: int
     limit: int
     has_more: bool
+
+
+class ReferralResponse(BaseModel):
+    referral_code: str
+    referrals_count: int
+    bonus_tokens_earned: int
+    referral_link: str
+
+
+def _build_referral_link(bot_username: str, referral_code: str) -> str:
+    if not bot_username:
+        return f"start=REF:{referral_code}"
+    return f"https://t.me/{bot_username}?start={referral_code}"
+
+
+async def _count_referrals(session: SessionDep, user_id: int) -> int:
+    """Number of users that joined via ``user_id``'s referral code."""
+    total = await session.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(User.referred_by == user_id)
+    )
+    return int(total or 0)
+
+
+async def _sum_referral_bonus(session: SessionDep, user_id: int) -> int:
+    """Sum of tokens credited to ``user_id`` as referral bonuses."""
+    total = await session.scalar(
+        select(func.coalesce(func.sum(Transaction.tokens_amount), 0)).where(
+            Transaction.user_id == user_id,
+            Transaction.transaction_type == "bonus",
+            Transaction.package_name == REFERRAL_BONUS_PACKAGE,
+            Transaction.payment_status == "completed",
+        )
+    )
+    return int(total or 0)
 
 
 async def _daily_bonus_available(session: SessionDep, user_id: int) -> bool:
@@ -123,4 +162,27 @@ async def get_usage_history(
         page=history.page,
         limit=history.limit,
         has_more=history.has_more,
+    )
+
+
+@router.get(
+    "/referral",
+    response_model=ReferralResponse,
+    summary="Referral code, share link and reward summary",
+)
+async def get_referral(
+    session: SessionDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> ReferralResponse:
+    referrals_count = await _count_referrals(session, user.id)
+    bonus_earned = await _sum_referral_bonus(session, user.id)
+    settings = get_settings()
+    return ReferralResponse(
+        referral_code=user.referral_code,
+        referrals_count=referrals_count,
+        bonus_tokens_earned=bonus_earned,
+        referral_link=_build_referral_link(
+            settings.telegram_bot_username,
+            user.referral_code,
+        ),
     )
