@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.resolve.outputs.tag }}
+          name: Release ${{ steps.resolve.outputs.tag }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.resolve.outputs.tag, '-') }}
+
+  deploy-staging:
+    name: Deploy to staging
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image references
+        id: images
+        run: |
+          REPO="${GITHUB_REPOSITORY,,}"
+          TAG="${{ needs.release.outputs.tag }}"
+          VERSION="${{ needs.release.outputs.version }}"
+          echo "backend=${{ env.REGISTRY }}/${REPO}/backend:${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "mini_app=${{ env.REGISTRY }}/${REPO}/mini-app:${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "admin=${{ env.REGISTRY }}/${REPO}/admin:${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        env:
+          BACKEND_IMAGE: ${{ steps.images.outputs.backend }}
+          MINI_APP_IMAGE: ${{ steps.images.outputs.mini_app }}
+          ADMIN_IMAGE: ${{ steps.images.outputs.admin }}
+          RELEASE_TAG: ${{ steps.images.outputs.tag }}
+          STAGING_DEPLOY_HOOK: ${{ secrets.STAGING_DEPLOY_HOOK }}
+        run: |
+          echo "Deploying ${RELEASE_TAG} to staging"
+          echo "  backend  : ${BACKEND_IMAGE}"
+          echo "  mini-app : ${MINI_APP_IMAGE}"
+          echo "  admin    : ${ADMIN_IMAGE}"
+          if [ -n "${STAGING_DEPLOY_HOOK}" ]; then
+            echo "Triggering staging deploy hook…"
+            curl --fail --silent --show-error \
+              -X POST \
+              -H "Content-Type: application/json" \
+              -d "{\"tag\":\"${RELEASE_TAG}\",\"backend\":\"${BACKEND_IMAGE}\"}" \
+              "${STAGING_DEPLOY_HOOK}"
+          else
+            echo "::notice title=Staging::STAGING_DEPLOY_HOOK secret is not set — skipping live deploy. Configure the secret to enable automatic staging rollout."
+          fi
