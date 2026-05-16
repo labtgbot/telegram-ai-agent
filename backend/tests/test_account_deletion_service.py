@@ -148,7 +148,7 @@ async def test_anonymise_user_clears_pii_and_keeps_transactions(db_session):
             user_id=user.id, claim_date=datetime(2026, 5, 1).date(), streak_day=1, amount=5
         )
     )
-    thread = ChatThread(user_id=user.id, external_id=12345)
+    thread = ChatThread(user_id=user.id, external_id="12345")
     db_session.add(thread)
     await db_session.flush()
     db_session.add(
