@@ -2,6 +2,7 @@
 
 Keep this module side-effect free: no I/O, no logger config — just declarative settings.
 """
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -80,6 +81,39 @@ class Settings(BaseSettings):
         description="Call setMyCommands when the FastAPI app starts (skipped without token).",
     )
 
+    composio_api_key: str = Field(
+        default="",
+        description="Composio API key — when empty the mock client is used.",
+    )
+    composio_default_user_id: str = Field(
+        default="",
+        description="Default Composio user/connected-account identifier used for tool calls.",
+    )
+    composio_base_url: str = Field(
+        default="https://backend.composio.dev",
+        description="Composio MCP API base URL.",
+    )
+    composio_timeout_seconds: float = Field(
+        default=30.0,
+        description="Per-request HTTP timeout for Composio tool invocations.",
+    )
+    composio_max_retries: int = Field(
+        default=3,
+        description="Maximum attempts (including the first call) for transient failures.",
+    )
+    composio_backoff_base_seconds: float = Field(
+        default=0.5,
+        description="Base delay for exponential backoff between retries (seconds).",
+    )
+    composio_backoff_max_seconds: float = Field(
+        default=8.0,
+        description="Upper bound for a single backoff delay.",
+    )
+    composio_default_toolkits: str = Field(
+        default="gemini,composio_search,image_gen,video_gen",
+        description="Comma-separated list of toolkits the client surfaces by default.",
+    )
+
     admin_jwt_secret: str = Field(
         default="change-me",
         description="HS256 secret used to sign admin JWT tokens.",
@@ -125,6 +159,19 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.app_env.lower() in {"development", "dev", "local"}
+
+    @property
+    def composio_enabled(self) -> bool:
+        """Whether to use the real Composio client (vs. mock)."""
+        return bool(self.composio_api_key and self.composio_api_key.strip())
+
+    @property
+    def composio_toolkits(self) -> tuple[str, ...]:
+        """Parse ``composio_default_toolkits`` into a normalised tuple."""
+        raw = (self.composio_default_toolkits or "").strip()
+        if not raw:
+            return ()
+        return tuple(chunk.strip() for chunk in raw.split(",") if chunk.strip())
 
     @property
     def super_admin_ids(self) -> set[int]:
