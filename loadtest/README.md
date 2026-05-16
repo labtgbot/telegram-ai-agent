@@ -11,6 +11,7 @@ loadtest/
 ├── README.md              # this file
 ├── balance_read.js        # GET /api/v1/user/balance — read SLO check
 ├── mixed_rw.js            # read + spend mix matching production traffic
+├── production_100u.js     # launch gate: 100 concurrent users, 10 min
 └── results/               # archived JSON summaries (gitignored)
 ```
 
@@ -24,9 +25,17 @@ k6 run loadtest/balance_read.js --vus 100 --duration 5m
 BASE_URL=https://staging.api.example.com \
   AUTH_TOKEN=$STAGING_TOKEN \
   k6 run loadtest/mixed_rw.js --vus 200 --duration 10m
+
+# Launch gate: 100 concurrent users for 10 min (ramped) hitting the
+# read / write / invoice mix the public bot sees. See
+# docs/LAUNCH_CHECKLIST.md §5 for exit gates.
+BASE_URL=https://api.telegram-ai-agent.example.com \
+  AUTH_TOKEN=$BETA_INIT_DATA \
+  k6 run loadtest/production_100u.js \
+    --summary-export "loadtest/results/$(date +%Y%m%d)-launch-100u.json"
 ```
 
-Both scripts honour `BASE_URL` (default `http://localhost:8000`) and
+All scripts honour `BASE_URL` (default `http://localhost:8000`) and
 `AUTH_TOKEN` (a Telegram WebApp `initData` string or a JWT admin token,
 depending on the scenario).
 
