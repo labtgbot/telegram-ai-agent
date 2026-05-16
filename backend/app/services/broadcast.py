@@ -774,6 +774,13 @@ async def drain_broadcast(
     interval = 1.0 / float(rate_limit)
     now_fn = now_fn or (lambda: datetime.now(UTC))
 
+    # Honour an upstream cancel: never flip a CANCELLED campaign back to
+    # in-progress just because the worker happened to pick it up.
+    await session.refresh(broadcast)
+    if broadcast.status == BROADCAST_STATUS_CANCELLED:
+        logger.info("broadcast.drain.cancelled_before_start", broadcast_id=broadcast.id)
+        return broadcast
+
     await mark_broadcast_started(session, broadcast=broadcast, now=now_fn())
     await session.commit()
 
