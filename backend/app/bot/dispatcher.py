@@ -17,6 +17,7 @@ from app.bot.client import TelegramApiError, TelegramClient
 from app.bot.handlers import (
     COMMAND_HANDLERS,
     HandlerContext,
+    handle_ask,
     handle_callback_query,
     handle_pre_checkout_query,
     handle_successful_payment,
@@ -114,12 +115,25 @@ async def _send_safe(ctx: HandlerContext, text: str) -> None:
 
 
 async def _handle_free_text(ctx: HandlerContext) -> None:
-    if ctx.chat_id is None:
+    """Treat any non-command text message as ``/ask <message>``.
+
+    Telegram users typing freely into the chat get an AI answer in
+    basic mode without learning the command surface; ``/agent`` is
+    still the explicit opt-in for the more expensive autonomous mode.
+    """
+    if ctx.chat_id is None or ctx.message is None:
         return
-    await ctx.client.send_message(
-        ctx.chat_id,
-        "Send /help to see what I can do — AI chat is coming in Phase 2.",
-    )
+    text = (ctx.message.get("text") or "").strip()
+    if not text:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "Send /help to see what I can do.",
+        )
+        return
+    # Synthesise a ``/ask <text>`` payload so ``handle_ask`` can parse it
+    # without a special-case for free-form input.
+    ctx.message = {**ctx.message, "text": f"/ask {text}"}
+    await handle_ask(ctx)
 
 
 async def _handle_unknown_command(ctx: HandlerContext) -> None:

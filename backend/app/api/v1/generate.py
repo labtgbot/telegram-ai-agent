@@ -6,10 +6,15 @@
   (provider returns a job id immediately) and debit tokens by tariff.
 * ``GET  /api/v1/generate/video/{job_id}`` — poll a video job's status
   (returns the final URL when ready, refund details on failure).
+* ``POST /api/v1/generate/text`` — synchronous text generation in one of
+  three modes (basic/advanced/autonomous_agent); returns the final
+  response in a single JSON body.
+* ``POST /api/v1/generate/text/stream`` — same call but server-sends the
+  response as SSE so the Mini-App can render a typewriter effect.
 
 The endpoints require a valid ``X-Telegram-Init-Data`` header (Mini-App
-flow) and are rate-limited via the ``image`` / ``video`` quota buckets
-defined in ``app.services.rate_limit_config``.
+flow) and are rate-limited via the ``image`` / ``video`` / ``text``
+quota buckets defined in ``app.services.rate_limit_config``.
 
 Token cost / quality tiers (mirrors ``ImageGenerationService``):
 
@@ -22,19 +27,29 @@ Video tariffs (mirrors ``VideoGenerationService``):
 * ``short_5s``    →  5s →  100 tokens
 * ``medium_15s``  → 15s →  250 tokens
 * ``long_60s``    → 60s →  800 tokens
+
+Text modes (mirrors ``TextGenerationService``):
+
+* ``basic``               →  1 token  → Gemini.
+* ``advanced``            →  5 tokens → Claude.
+* ``autonomous_agent``    → 10 tokens → GPT.
 """
 from __future__ import annotations
 
+import json
 import uuid
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from app.api.rate_limit import rate_limit
 from app.auth.dependencies import SessionDep, get_current_user_from_init_data
 from app.core.logging import get_logger
+from app.core.redis import get_redis
 from app.models.user import User
 from app.services.composio import (
     ComposioClient,
@@ -50,6 +65,29 @@ from app.services.image_generation import (
     InvalidAspectRatioError,
     InvalidPromptError,
     InvalidQualityError,
+)
+from app.services.text_generation import (
+    MAX_PROMPT_LENGTH as MAX_TEXT_PROMPT_LENGTH,
+)
+from app.services.text_generation import (
+    MAX_SYSTEM_PROMPT_LENGTH as MAX_TEXT_SYSTEM_PROMPT_LENGTH,
+)
+from app.services.text_generation import (
+    MODE_BASIC,
+    MODE_COST,
+    SUPPORTED_MODES,
+    ConversationHistory,
+    DbConversationHistory,
+    InvalidMaxTokensError,
+    InvalidModeError,
+    InvalidTemperatureError,
+    RedisConversationHistory,
+    TextGenerationResult,
+    TextGenerationService,
+    TextProviderError,
+)
+from app.services.text_generation import (
+    InvalidPromptError as TextInvalidPromptError,
 )
 from app.services.token_service import (
     InsufficientTokensError,
@@ -538,3 +576,381 @@ async def get_video_job(
         ) from exc
 
     return _to_response(view)
+
+
+# ---------------------------------------------------------------- text schemas
+
+
+_TextMode = Literal["basic", "advanced", "autonomous_agent"]
+
+
+class TextGenerationRequest(BaseModel):
+    """Body for ``POST /api/v1/generate/text`` (and the SSE sibling)."""
+
+    prompt: str = Field(..., min_length=1, max_length=MAX_TEXT_PROMPT_LENGTH)
+    mode: _TextMode = MODE_BASIC  # type: ignore[assignment]
+    system_prompt: str | None = Field(
+        default=None,
+        max_length=MAX_TEXT_SYSTEM_PROMPT_LENGTH,
+        description="Optional system message prepended to the conversation.",
+    )
+    temperature: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Sampling temperature; defaults to 0.7 when omitted.",
+    )
+    max_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        le=4096,
+        description="Maximum response tokens; defaults to 1024 when omitted.",
+    )
+    thread_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description=(
+            "Caller-controlled conversation identifier. When set, the "
+            "configured history backend (Redis for free, DB for premium) "
+            "loads / appends turns around this call."
+        ),
+    )
+
+
+class TextGenerationResponse(BaseModel):
+    text: str
+    mode: _TextMode
+    tokens_spent: int
+    new_balance: int
+    usage_log_id: int
+    transaction_id: int
+    request_id: str
+    composio_tool: str
+    mcp_server: str | None = None
+    processing_time_ms: int | None = None
+    thread_id: str | None = None
+
+
+def _text_response(
+    result: TextGenerationResult, *, request_id: str
+) -> TextGenerationResponse:
+    return TextGenerationResponse(
+        text=result.text,
+        mode=result.mode,  # type: ignore[arg-type]
+        tokens_spent=result.tokens_spent,
+        new_balance=result.new_balance,
+        usage_log_id=result.usage_log_id,
+        transaction_id=result.transaction_id,
+        request_id=request_id,
+        composio_tool=result.composio_tool,
+        mcp_server=result.mcp_server,
+        processing_time_ms=result.processing_time_ms,
+        thread_id=result.thread_id,
+    )
+
+
+def _build_text_history(session, user: User) -> ConversationHistory:
+    """Pick the conversation-history backend for ``user``.
+
+    Premium users get durable storage in ``chat_threads`` / ``chat_messages``
+    so the bot and Mini-App can show their threads across devices;
+    free / anonymous users keep their history in Redis with a sliding TTL
+    (cheap, ephemeral, capped per thread).
+    """
+    if user.is_premium:
+        return DbConversationHistory(session)
+    return RedisConversationHistory(get_redis())
+
+
+def _build_text_service(session, user: User) -> TextGenerationService:
+    composio = get_composio_client()
+    history = _build_text_history(session, user)
+    return TextGenerationService(session, composio, history=history)
+
+
+def _raise_text_error(
+    exc: Exception,
+    *,
+    request_id: str,
+    user_id: int,
+    session_to_rollback,
+) -> None:
+    """Translate a service-layer error into the right HTTP response.
+
+    Provider errors trigger a rollback first so partial debits / history
+    writes from the failed attempt don't leak into the audit trail.
+    """
+    if isinstance(exc, TextInvalidPromptError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_prompt", "message": str(exc)},
+        ) from exc
+    if isinstance(exc, InvalidModeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_mode",
+                "message": str(exc),
+                "supported": sorted(SUPPORTED_MODES),
+                "mode_cost": dict(MODE_COST),
+            },
+        ) from exc
+    if isinstance(exc, InvalidTemperatureError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_temperature", "message": str(exc)},
+        ) from exc
+    if isinstance(exc, InvalidMaxTokensError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_max_tokens", "message": str(exc)},
+        ) from exc
+    if isinstance(exc, InsufficientTokensError):
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail={
+                "error": "insufficient_tokens",
+                "required": exc.required,
+                "available": exc.available,
+            },
+        ) from exc
+    if isinstance(exc, UserNotFoundError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="user_not_found",
+        ) from exc
+    if isinstance(exc, TextProviderError):
+        # The service hasn't committed anything yet — drop the in-flight
+        # state so a retry starts clean.
+        # session_to_rollback.rollback is awaited by the caller.
+        logger.warning(
+            "generate.text.provider_error",
+            user_id=user_id,
+            request_id=request_id,
+            error=str(exc),
+            provider_error=exc.provider_error,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error": "text_provider_error",
+                "message": str(exc),
+                "provider_error": exc.provider_error,
+            },
+        ) from exc
+
+
+# --------------------------------------------------------------- text endpoint
+
+
+@router.post(
+    "/text",
+    response_model=TextGenerationResponse,
+    summary="Generate text (basic / advanced / autonomous_agent) and debit tokens",
+    dependencies=[Depends(rate_limit(action="text"))],
+)
+async def generate_text(
+    body: TextGenerationRequest,
+    session: SessionDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> TextGenerationResponse:
+    """Synchronous text generation via the Composio text toolkits.
+
+    Failure modes:
+
+    * ``400 invalid_prompt`` / ``invalid_mode`` / ``invalid_temperature``
+      / ``invalid_max_tokens``
+    * ``402 insufficient_tokens`` — balance below the mode price
+    * ``404 user_not_found``
+    * ``502 text_provider_error`` — Composio call failed or returned empty
+    * ``500 commit_failed`` — DB error on commit
+    """
+    service = _build_text_service(session, user)
+    request_id = uuid.uuid4().hex
+
+    try:
+        result = await service.generate(
+            user_id=user.id,
+            prompt=body.prompt,
+            mode=body.mode,
+            system_prompt=body.system_prompt,
+            temperature=body.temperature,
+            max_tokens=body.max_tokens,
+            thread_id=body.thread_id,
+            request_id=request_id,
+        )
+    except TextProviderError as exc:
+        await session.rollback()
+        _raise_text_error(
+            exc,
+            request_id=request_id,
+            user_id=user.id,
+            session_to_rollback=session,
+        )
+        raise  # unreachable; satisfies type-checker
+    except (
+        TextInvalidPromptError,
+        InvalidModeError,
+        InvalidTemperatureError,
+        InvalidMaxTokensError,
+        InsufficientTokensError,
+        UserNotFoundError,
+    ) as exc:
+        _raise_text_error(
+            exc,
+            request_id=request_id,
+            user_id=user.id,
+            session_to_rollback=session,
+        )
+        raise  # unreachable
+
+    try:
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001 — surface a clean 500
+        await session.rollback()
+        logger.exception(
+            "generate.text.commit_failed",
+            user_id=user.id,
+            request_id=request_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="commit_failed",
+        ) from exc
+
+    return _text_response(result, request_id=request_id)
+
+
+@router.post(
+    "/text/stream",
+    summary="Stream a text generation response over SSE",
+    dependencies=[Depends(rate_limit(action="text"))],
+    responses={200: {"content": {"text/event-stream": {}}}},
+)
+async def generate_text_stream(
+    body: TextGenerationRequest,
+    session: SessionDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> StreamingResponse:
+    """Stream a text response as Server-Sent Events.
+
+    The body and validation rules match :func:`generate_text`. The
+    response is a stream of ``data: {json}\\n\\n`` frames; the first frame
+    carries ``{"event": "start", "request_id": ...}``, subsequent
+    ``"delta"`` frames carry incremental text, and a terminal
+    ``"final"`` frame carries the same payload as the non-streaming
+    endpoint.
+
+    Validation errors are raised before the response starts streaming
+    (so callers still see proper 4xx). Once streaming begins, the only
+    transport-level error surface is a ``{"event": "error", ...}`` frame
+    immediately followed by stream closure.
+    """
+    service = _build_text_service(session, user)
+    request_id = uuid.uuid4().hex
+
+    # Pre-validate by surfacing the most common errors before we open the
+    # SSE response — the client gets a normal JSON 4xx instead of a half
+    # stream that ends with an "error" frame.
+    try:
+        stream = await service.iter_generate(
+            user_id=user.id,
+            prompt=body.prompt,
+            mode=body.mode,
+            system_prompt=body.system_prompt,
+            temperature=body.temperature,
+            max_tokens=body.max_tokens,
+            thread_id=body.thread_id,
+            request_id=request_id,
+        )
+    except TextProviderError as exc:
+        await session.rollback()
+        _raise_text_error(
+            exc,
+            request_id=request_id,
+            user_id=user.id,
+            session_to_rollback=session,
+        )
+        raise  # unreachable
+    except (
+        TextInvalidPromptError,
+        InvalidModeError,
+        InvalidTemperatureError,
+        InvalidMaxTokensError,
+        InsufficientTokensError,
+        UserNotFoundError,
+    ) as exc:
+        _raise_text_error(
+            exc,
+            request_id=request_id,
+            user_id=user.id,
+            session_to_rollback=session,
+        )
+        raise  # unreachable
+
+    # ``iter_generate`` runs the full pipeline synchronously and only
+    # *then* hands us a chunk iterator — so by the time we reach this
+    # point, tokens have been debited and history persisted. Commit the
+    # accumulated session state now so a slow consumer can't keep the
+    # transaction open across the entire stream.
+    try:
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001 — surface a clean 500
+        await session.rollback()
+        logger.exception(
+            "generate.text.stream_commit_failed",
+            user_id=user.id,
+            request_id=request_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="commit_failed",
+        ) from exc
+
+    async def _sse() -> AsyncIterator[bytes]:
+        yield _sse_frame({"event": "start", "request_id": request_id})
+        try:
+            async for chunk in stream:
+                if chunk.kind == "delta":
+                    yield _sse_frame(
+                        {"event": "delta", "content": chunk.content}
+                    )
+                elif chunk.kind == "final" and chunk.result is not None:
+                    payload = _text_response(
+                        chunk.result, request_id=request_id
+                    ).model_dump()
+                    payload["event"] = "final"
+                    yield _sse_frame(payload)
+        except Exception as exc:  # noqa: BLE001 — never leak through SSE
+            logger.exception(
+                "generate.text.stream_failed",
+                user_id=user.id,
+                request_id=request_id,
+                error=str(exc),
+            )
+            yield _sse_frame(
+                {
+                    "event": "error",
+                    "error": "stream_failed",
+                    "message": str(exc),
+                }
+            )
+        yield _sse_frame({"event": "done"})
+
+    return StreamingResponse(
+        _sse(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "X-Request-Id": request_id,
+        },
+    )
+
+
+def _sse_frame(payload: dict) -> bytes:
+    """Encode ``payload`` as a single SSE ``data:`` frame."""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
