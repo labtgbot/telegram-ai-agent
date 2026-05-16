@@ -19,7 +19,6 @@ if str(REPO_ROOT) not in sys.path:
 from scripts import launch_smoketest  # noqa: E402
 from scripts.launch_smoketest import SmokeConfig, run  # noqa: E402
 
-
 _RealAsyncClient = httpx.AsyncClient
 
 
