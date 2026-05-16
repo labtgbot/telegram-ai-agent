@@ -8,10 +8,12 @@ on:
       - "backend/**"
       - "mini-app/**"
       - "admin-dashboard/**"
+      - "deploy/backup/**"
       - "docker/**"
       - ".github/workflows/docker.yml"
   pull_request:
     paths:
+      - "deploy/backup/**"
       - "docker/**"
       - ".github/workflows/docker.yml"
   workflow_dispatch:
@@ -46,6 +48,10 @@ jobs:
           - name: admin
             dockerfile: docker/Dockerfile.admin
             context: admin-dashboard
+            target: ""
+          - name: backup
+            dockerfile: deploy/backup/Dockerfile
+            context: deploy/backup
             target: ""
     steps:
       - uses: actions/checkout@v6

@@ -169,6 +169,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Validate compose.backup.yml structure
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+          with open("docker/compose.backup.yml") as f:
+              cfg = yaml.safe_load(f)
+          svc = sorted(cfg.get("services", {}))
+          for name in ("backup-supervisor", "backup-runner"):
+              assert name in svc, f"missing service {name!r}; got {svc}"
+          for name in ("backup-supervisor", "backup-runner"):
+              s = cfg["services"][name]
+              assert "image" in s, f"{name}: image missing"
+              assert "environment" in s, f"{name}: environment missing"
+              env = s["environment"]
+              for required in ("PGHOST", "PGUSER", "BACKUP_S3_BUCKET"):
+                  assert required in env, f"{name}: env var {required} missing"
+          print("ok:", svc)
+          PY
+
       - name: docker compose config (compose.prod.yml + compose.backup.yml)
         env:
           POSTGRES_PASSWORD: ci-placeholder
@@ -181,11 +200,21 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ci
         run: |
           touch .env.prod
+          # The backup services live under compose profiles, so they're
+          # filtered out of `docker compose config` unless we opt in.
           docker compose \
             -f docker/compose.prod.yml \
             -f docker/compose.backup.yml \
-            --env-file .env.prod config --format json > /tmp/compose.backup.json
-          test -s /tmp/compose.backup.json
-          jq -r '.services | keys[]' /tmp/compose.backup.json | sort > /tmp/svc.txt
-          grep -qx backup-supervisor /tmp/svc.txt
-          grep -qx backup-runner /tmp/svc.txt
+            --profile backup-supervisor \
+            --profile backup-runner \
+            --env-file .env.prod config > /tmp/compose.backup.merged.yml
+          test -s /tmp/compose.backup.merged.yml
+          python3 - <<'PY'
+          import yaml
+          with open("/tmp/compose.backup.merged.yml") as f:
+              cfg = yaml.safe_load(f)
+          svc = sorted(cfg.get("services", {}))
+          for name in ("backup-supervisor", "backup-runner"):
+              assert name in svc, f"missing {name!r} after merge; got {svc}"
+          print("merged services:", svc)
+          PY
