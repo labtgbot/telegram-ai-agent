@@ -385,6 +385,43 @@ async def test_reconcile_unknown_user_raises(db_session):
         await reconcile_user_balance(db_session, 123_456_789)
 
 
+@pytest.mark.asyncio
+async def test_reconcile_consistent_after_refund_of_spend(db_session):
+    user = await _make_user(
+        db_session, telegram_id=8_000_017, code="TS-REC-3", balance=100
+    )
+    svc = TokenService(db_session)
+    spent = await svc.spend(user_id=user.id, amount=40, service="text_query")
+    await svc.refund(transaction_id=spent.transaction_id)
+    audit = await reconcile_user_balance(db_session, user.id)
+    # Note: _make_user sets users.token_balance directly without a credit row,
+    # so the ledger only knows about spend(-40) + refund-of-spend(+40) = 0.
+    # The 100 starting balance is the drift between stored and ledger.
+    assert audit.stored_balance == 100
+    assert audit.computed_balance == 0
+    assert audit.drift == 100
+
+
+@pytest.mark.asyncio
+async def test_reconcile_consistent_after_refund_of_purchase(db_session):
+    user = await _make_user(
+        db_session, telegram_id=8_000_018, code="TS-REC-4", balance=0
+    )
+    svc = TokenService(db_session)
+    purchase = await svc.add(
+        user_id=user.id,
+        amount=500,
+        transaction_type="purchase",
+        package_name="basic",
+    )
+    await svc.refund(transaction_id=purchase.transaction_id)
+    audit = await reconcile_user_balance(db_session, user.id)
+    # purchase(+500) + refund-of-purchase(-500) = 0; stored is also 0.
+    assert audit.stored_balance == 0
+    assert audit.computed_balance == 0
+    assert audit.is_consistent
+
+
 # --------------------------------------------------------- concurrency smoke
 
 

@@ -405,9 +405,14 @@ class TokenService:
     ) -> TokenOperationResult:
         """Reverse a previous ``spend`` or ``purchase`` transaction.
 
-        Creates a new ``refund`` transaction crediting the original
-        amount back to the user and updates ``token_balance``.  Already
-        refunded transactions cannot be refunded twice.
+        Creates a new ``refund`` transaction that reverses the original:
+
+        * refund of ``spend`` — re-credits the tokens to the user and
+          rolls back ``users.total_tokens_spent``;
+        * refund of ``purchase`` — debits the tokens (user got money
+          back externally) and rolls back ``users.total_tokens_purchased``.
+
+        Already-refunded transactions cannot be refunded a second time.
         """
         stmt = (
             select(Transaction)
@@ -425,8 +430,11 @@ class TokenService:
                 f"{original.transaction_type!r} is not refundable"
             )
 
-        # Reject double-refund: scan for existing refund tied to this id.
-        payment_marker = f"refund:tx={transaction_id}"
+        # Embed the original type in the marker so the reconcile query can
+        # classify refund rows without re-joining to the source transaction.
+        payment_marker = (
+            f"refund:{original.transaction_type}:tx={transaction_id}"
+        )
         existing = await self.session.execute(
             select(Transaction.id).where(
                 Transaction.transaction_type == "refund",
@@ -440,13 +448,13 @@ class TokenService:
 
         user = await self._lock_user(original.user_id)
         amount = int(original.tokens_amount)
-        user.token_balance = int(user.token_balance or 0) + amount
         if original.transaction_type == "spend":
-            # Roll back the spend bookkeeping.
+            user.token_balance = int(user.token_balance or 0) + amount
             user.total_tokens_spent = max(
                 int(user.total_tokens_spent or 0) - amount, 0
             )
-        elif original.transaction_type == "purchase":
+        else:  # purchase
+            user.token_balance = max(int(user.token_balance or 0) - amount, 0)
             user.total_tokens_purchased = max(
                 int(user.total_tokens_purchased or 0) - amount, 0
             )
@@ -504,10 +512,14 @@ async def reconcile_user_balance(
 
     The expected balance is::
 
-        SUM(credit transactions) - SUM(spend transactions)
+        SUM(credits) - SUM(debits)
 
-    Credit types are ``purchase``, ``bonus``, ``manual_bonus`` and
-    ``refund``.  Any non-zero ``drift`` indicates the materialised
+    where credits = ``purchase + bonus + manual_bonus + refund-of-spend``
+    and debits = ``spend + refund-of-purchase``.  Refund rows are
+    classified via their ``payment_id`` marker
+    (``refund:{original_type}:tx=...``).
+
+    Any non-zero ``drift`` indicates the materialised
     ``users.token_balance`` and the ledger have diverged — this should
     never happen but the daily reconcile job alerts on it.
     """
@@ -516,23 +528,35 @@ async def reconcile_user_balance(
     if stored is None:
         raise UserNotFoundError(f"user {user_id} not found")
 
-    credit_stmt = (
+    base_credit_stmt = (
         select(func.coalesce(func.sum(Transaction.tokens_amount), 0))
         .where(Transaction.user_id == user_id)
         .where(
-            Transaction.transaction_type.in_(
-                ("purchase", "bonus", "manual_bonus", "refund")
-            )
+            Transaction.transaction_type.in_(("purchase", "bonus", "manual_bonus"))
         )
     )
-    debit_stmt = (
+    spend_stmt = (
         select(func.coalesce(func.sum(Transaction.tokens_amount), 0))
         .where(Transaction.user_id == user_id)
         .where(Transaction.transaction_type == "spend")
     )
-    credit = int((await session.execute(credit_stmt)).scalar_one())
-    debit = int((await session.execute(debit_stmt)).scalar_one())
-    computed = credit - debit
+    refund_credit_stmt = (
+        select(func.coalesce(func.sum(Transaction.tokens_amount), 0))
+        .where(Transaction.user_id == user_id)
+        .where(Transaction.transaction_type == "refund")
+        .where(Transaction.payment_id.like("refund:spend:%"))
+    )
+    refund_debit_stmt = (
+        select(func.coalesce(func.sum(Transaction.tokens_amount), 0))
+        .where(Transaction.user_id == user_id)
+        .where(Transaction.transaction_type == "refund")
+        .where(Transaction.payment_id.like("refund:purchase:%"))
+    )
+    base_credit = int((await session.execute(base_credit_stmt)).scalar_one())
+    spend = int((await session.execute(spend_stmt)).scalar_one())
+    refund_credit = int((await session.execute(refund_credit_stmt)).scalar_one())
+    refund_debit = int((await session.execute(refund_debit_stmt)).scalar_one())
+    computed = base_credit + refund_credit - spend - refund_debit
     return BalanceAudit(
         user_id=user_id,
         stored_balance=int(stored),
