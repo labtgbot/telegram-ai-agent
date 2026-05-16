@@ -20,12 +20,19 @@ _configured: bool = False
 
 
 def _shared_processors() -> list[Any]:
+    # Local import keeps ``log_scrubbing`` out of the import cycle for
+    # callers that only need the logger types.
+    from app.core.log_scrubbing import scrub_processor
+
     return [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
+        # Redact PII (emails, tokens, init_data, credentials) BEFORE the
+        # final renderer so neither JSON nor console output leaks PD.
+        scrub_processor,
     ]
 
 
