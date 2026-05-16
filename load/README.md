@@ -26,6 +26,10 @@ make backend-up           # or: docker compose up -d backend postgres redis
 # 1) Ensure the API runs with Composio in mock mode and a known bot token.
 export TELEGRAM_BOT_TOKEN=1234567890:LOAD-TEST-TOKEN
 unset COMPOSIO_API_KEY    # mock client kicks in automatically
+# Seed the mock with a text payload so /generate/text returns 200 instead
+# of raising TextProviderError. Without this the mock falls back to
+# {"echo": params} which the generation service can't extract text from.
+export COMPOSIO_MOCK_TEXT_RESPONSE="Mock generation response for load."
 
 # 2) Seed quotas + load user
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/telegram_ai_agent \
@@ -72,3 +76,4 @@ on-demand jobs because it puts measurable load on the box.
 | `LOAD_USER_TOKEN_BALANCE` | `10_000_000`                                     | Tokens granted by `seed_load.py`                  |
 | `LOAD_PROMPT`             | "Summarise the impact of asynchronous I/O…"     | Body of every request                            |
 | `DATABASE_URL`            | `postgresql+asyncpg://postgres:postgres@…`       | Where `seed_load.py` writes                       |
+| `COMPOSIO_MOCK_TEXT_RESPONSE` | _(unset)_                                    | When set, `build_client` seeds the mock with `data={"text": <value>}` for the text-gen tool. Required for load runs — without it the mock's default `{"echo": params}` payload fails text extraction. |

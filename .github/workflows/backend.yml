@@ -279,6 +279,9 @@ jobs:
       TELEGRAM_BOT_TOKEN: "1234567890:LOAD-SMOKE-AAAAAAAAAAAAAAAAAAAAAA"
       # Force the mock Composio path even if a key leaks into the env.
       COMPOSIO_API_KEY: ""
+      # Tell build_client to seed the mock with a real text payload so
+      # /generate/text returns 200 instead of raising TextProviderError.
+      COMPOSIO_MOCK_TEXT_RESPONSE: "Mock generation response for load smoke."
 
     steps:
       - uses: actions/checkout@v4
