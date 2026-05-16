@@ -141,6 +141,34 @@ class TelegramClient:
             reply_markup=reply_markup,
         )
 
+    async def send_video(
+        self,
+        chat_id: int,
+        video: str,
+        *,
+        caption: str | None = None,
+        parse_mode: str | None = "HTML",
+        duration: int | None = None,
+        supports_streaming: bool | None = True,
+        reply_markup: dict[str, Any] | None = None,
+    ) -> Any:
+        """Send a video by URL (or ``file_id``).
+
+        Mirrors :meth:`send_photo` — the Composio video toolkit returns a
+        fetchable URL so Telegram can ingest it directly. ``duration`` and
+        ``supports_streaming`` are forwarded as Bot API kwargs when set.
+        """
+        return await self.call(
+            "sendVideo",
+            chat_id=chat_id,
+            video=video,
+            caption=caption,
+            parse_mode=parse_mode,
+            duration=duration,
+            supports_streaming=supports_streaming,
+            reply_markup=reply_markup,
+        )
+
     async def edit_message_text(
         self,
         chat_id: int,

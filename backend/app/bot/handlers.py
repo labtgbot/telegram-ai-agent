@@ -8,6 +8,7 @@ errors bubble to the dispatcher which logs and replies with a generic
 """
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
@@ -39,6 +40,20 @@ from app.services.token_service import (
     UserNotFoundError,
 )
 from app.services.users import find_user_by_telegram_id
+from app.services.video_generation import (
+    SUPPORTED_TARIFFS,
+    TARIFF_COST,
+    TARIFF_DURATION,
+    TARIFF_SHORT,
+    InvalidReferenceImageError,
+    InvalidTariffError,
+    VideoGenerationService,
+    VideoJobView,
+    VideoProviderError,
+)
+from app.services.video_generation import (
+    InvalidPromptError as VideoInvalidPromptError,
+)
 
 logger = get_logger(__name__)
 
@@ -382,6 +397,191 @@ async def handle_image(ctx: HandlerContext) -> None:
         )
 
 
+def _parse_video_args(text: str | None) -> tuple[str | None, str | None]:
+    """Parse the ``/video [tariff] <prompt>`` argument string.
+
+    The optional first token, when one of the catalog tariffs or a
+    matching ``5s`` / ``15s`` / ``60s`` shorthand, is treated as the
+    tariff selector; the remainder is the prompt.  When no tariff is
+    given, the prompt is the full argument string and the caller falls
+    back to the default tariff.
+    """
+    if not text:
+        return None, None
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        return None, None
+    args = parts[1].strip()
+    if not args:
+        return None, None
+    first, _, rest = args.partition(" ")
+    first_norm = first.strip().lower()
+    if first_norm in SUPPORTED_TARIFFS:
+        return first_norm, rest.strip() or None
+    if first_norm in ("5s", "15s", "60s"):
+        mapping = {"5s": "short_5s", "15s": "medium_15s", "60s": "long_60s"}
+        return mapping[first_norm], rest.strip() or None
+    return None, args
+
+
+def _format_video_tariff_help() -> str:
+    lines = ["🎬 <b>Video generation</b>", ""]
+    lines.append("Usage:")
+    lines.append("• <code>/video &lt;prompt&gt;</code> — short clip (default)")
+    lines.append("• <code>/video &lt;tariff&gt; &lt;prompt&gt;</code> — pick a tariff")
+    lines.append("")
+    lines.append("<b>Tariffs</b>")
+    for tariff in ("short_5s", "medium_15s", "long_60s"):
+        duration = TARIFF_DURATION[tariff]
+        cost = TARIFF_COST[tariff]
+        lines.append(
+            f"• <code>{tariff}</code> — {duration}s — <b>{cost}</b> tokens"
+        )
+    return "\n".join(lines)
+
+
+def _format_video_progress(view: VideoJobView, prompt: str) -> str:
+    status_label = {
+        "pending": "⏳ Queued",
+        "queued": "⏳ Queued",
+        "in_progress": "🎬 Rendering",
+        "succeeded": "✅ Ready",
+        "failed": "❌ Failed",
+        "refunded": "↩️ Refunded",
+    }.get(view.status, view.status)
+    short_prompt = (prompt[:160] + "…") if len(prompt) > 160 else prompt
+    return (
+        f"{status_label} — <b>{view.tariff}</b> ({view.duration_s}s)\n"
+        f"Prompt: <i>{short_prompt}</i>\n"
+        f"Cost: <b>{view.tokens_cost}</b> tokens · "
+        f"Job: <code>#{view.id}</code>"
+    )
+
+
+async def handle_video(ctx: HandlerContext) -> None:
+    """Submit a video-generation job: ``/video [tariff] <prompt>``.
+
+    The handler returns immediately after submission so the user sees a
+    "queued" message right away; the polling worker drives the job to
+    completion in the background.  Status updates are not pushed from
+    this handler — use ``GET /api/v1/generate/video/{job_id}`` from the
+    Mini App, or ``/video`` again to start another job.
+    """
+    if ctx.chat_id is None or ctx.from_user is None:
+        return
+
+    tariff, prompt = _parse_video_args((ctx.message or {}).get("text"))
+    if not prompt:
+        await ctx.client.send_message(ctx.chat_id, _format_video_tariff_help())
+        return
+
+    user = await find_user_by_telegram_id(ctx.session, int(ctx.from_user["id"]))
+    if user is None:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "I don't recognise you yet — send /start to register.",
+        )
+        return
+
+    if ctx.composio is None:
+        logger.error("bot.video.composio_unconfigured", user_id=user.id)
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "Video generation is temporarily unavailable. Please try again later.",
+        )
+        return
+
+    service = VideoGenerationService(ctx.session, ctx.composio)
+    request_id = uuid.uuid4().hex
+    try:
+        view = await service.create(
+            user_id=user.id,
+            prompt=prompt,
+            tariff=tariff or TARIFF_SHORT,
+            request_id=request_id,
+        )
+    except VideoInvalidPromptError as exc:
+        await ctx.client.send_message(ctx.chat_id, f"❌ {exc}")
+        return
+    except InvalidTariffError as exc:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            f"❌ {exc}\n\n{_format_video_tariff_help()}",
+        )
+        return
+    except InvalidReferenceImageError as exc:
+        await ctx.client.send_message(ctx.chat_id, f"❌ {exc}")
+        return
+    except InsufficientTokensError as exc:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            (
+                "💸 Not enough tokens. "
+                f"Need <b>{exc.required}</b>, you have <b>{exc.available}</b>.\n"
+                "Tap /buy to top up."
+            ),
+        )
+        return
+    except UserNotFoundError:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "I don't recognise you yet — send /start to register.",
+        )
+        return
+    except VideoProviderError as exc:
+        logger.warning(
+            "bot.video.provider_error",
+            user_id=user.id,
+            error=str(exc),
+            provider_error=exc.provider_error,
+        )
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "🛠 The video service is having trouble right now — please try again in a moment.",
+        )
+        return
+
+    text = _format_video_progress(view, prompt)
+    if view.status == "succeeded" and view.result_url:
+        # Provider returned a URL on the submit call — happy path for
+        # toolkits that render synchronously even though the API is async.
+        try:
+            await ctx.client.send_video(
+                ctx.chat_id,
+                view.result_url,
+                caption=text,
+                duration=view.duration_s,
+            )
+        except TelegramApiError as exc:
+            logger.warning(
+                "bot.video.send_video_failed",
+                user_id=user.id,
+                job_id=view.id,
+                error=str(exc),
+            )
+            await ctx.client.send_message(
+                ctx.chat_id,
+                f"{text}\n\n🔗 {view.result_url}",
+            )
+        return
+    if view.status in ("failed", "refunded"):
+        # The service refunded already; tell the user what happened.
+        reason = view.error_message or "video generation failed"
+        await ctx.client.send_message(
+            ctx.chat_id,
+            (
+                f"❌ {reason}\n"
+                f"Refunded <b>{view.tokens_cost}</b> tokens — your balance is safe."
+            ),
+        )
+        return
+
+    await ctx.client.send_message(
+        ctx.chat_id,
+        text + "\n\nI'll keep working on it — check back in a moment.",
+    )
+
+
 async def handle_profile(ctx: HandlerContext) -> None:
     if ctx.chat_id is None or ctx.from_user is None:
         return
@@ -604,6 +804,7 @@ COMMAND_HANDLERS = {
     "balance": handle_balance,
     "buy": handle_buy,
     "image": handle_image,
+    "video": handle_video,
     "profile": handle_profile,
     "referral": handle_referral,
 }
