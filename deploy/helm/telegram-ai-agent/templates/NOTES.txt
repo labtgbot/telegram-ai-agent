@@ -1,0 +1,13 @@
+Telegram AI Agent {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}".
+
+Hosts:
+{{- range .Values.ingress.hosts }}
+  - https://{{ .host }}
+{{- end }}
+
+Checks:
+  kubectl -n {{ .Release.Namespace }} get deploy,svc,ingress,hpa -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "telegram-ai-agent.componentName" (dict "ctx" . "name" "backend") }}
+
+Webhook URL to register with @BotFather (after DNS + TLS are live):
+  https://{{ (index .Values.ingress.hosts 0).host }}{{ .Values.config.API_V1_PREFIX }}/bot/webhook

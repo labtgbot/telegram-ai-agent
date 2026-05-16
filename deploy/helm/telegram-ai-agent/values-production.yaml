@@ -1,0 +1,121 @@
+# Production overrides.
+#
+# Usage:
+#   helm upgrade --install telegram-ai-agent deploy/helm/telegram-ai-agent \
+#     --namespace tgai-prod --create-namespace \
+#     -f deploy/helm/telegram-ai-agent/values.yaml \
+#     -f deploy/helm/telegram-ai-agent/values-production.yaml \
+#     --set image.tag=${VERSION}
+
+commonLabels:
+  environment: production
+
+config:
+  APP_ENV: production
+  APP_DEBUG: "false"
+  LOG_LEVEL: INFO
+  LOG_FORMAT: json
+  API_V1_PREFIX: /api/v1
+  HEALTH_CHECK_TIMEOUT: "2.0"
+  TELEGRAM_API_BASE_URL: https://api.telegram.org
+  TELEGRAM_SET_COMMANDS_ON_STARTUP: "true"
+  COMPOSIO_BASE_URL: https://backend.composio.dev
+  PAYMENT_CURRENCY: XTR
+
+clusterIssuer: letsencrypt-prod
+
+backend:
+  replicaCount: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 12
+    targetCPUUtilizationPercentage: 65
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 2
+  # Argo Rollouts canary deploy in production — disabled by default so the
+  # chart works on a plain cluster. Flip to `true` once Argo Rollouts is
+  # installed and the controller is reconciling Rollout resources.
+  rollout:
+    enabled: false
+    strategy: canary
+    canary:
+      steps:
+        - setWeight: 10
+        - pause: { duration: 120 }
+        - setWeight: 30
+        - pause: { duration: 300 }
+        - setWeight: 60
+        - pause: { duration: 300 }
+        - setWeight: 100
+  resources:
+    requests:
+      cpu: 500m
+      memory: 384Mi
+    limits:
+      cpu: 2000m
+      memory: 1Gi
+
+worker:
+  enabled: false  # Phase 4 follow-up — turn on once celery image ships.
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  resources:
+    requests:
+      cpu: 300m
+      memory: 384Mi
+    limits:
+      cpu: 1500m
+      memory: 1Gi
+
+miniApp:
+  replicaCount: 3
+  autoscaling:
+    enabled: false
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 192Mi
+
+admin:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 200m
+      memory: 192Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+ingress:
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+  hosts:
+    - host: bot.example.com
+      paths:
+        - path: /api/
+          pathType: Prefix
+          service: backend
+        - path: /
+          pathType: Prefix
+          service: miniApp
+    - host: admin.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: admin
+  tls:
+    enabled: true

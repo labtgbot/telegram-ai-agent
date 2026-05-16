@@ -1,0 +1,120 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/**"
+      - "docker/compose.prod.yml"
+      - "docker/Caddyfile.prod"
+      - ".github/workflows/deploy.yml"
+  pull_request:
+    paths:
+      - "deploy/**"
+      - "docker/compose.prod.yml"
+      - "docker/Caddyfile.prod"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  helm-lint:
+    name: Helm lint + template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.1
+
+      - name: Helm dependency update
+        working-directory: deploy/helm/telegram-ai-agent
+        run: |
+          if grep -q "^dependencies:" Chart.yaml; then
+            helm dependency update
+          else
+            echo "No dependencies declared — skipping."
+          fi
+
+      - name: Helm lint (default values)
+        run: helm lint deploy/helm/telegram-ai-agent
+
+      - name: Helm lint (staging)
+        run: |
+          helm lint deploy/helm/telegram-ai-agent \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-staging.yaml \
+            --set image.tag=0.0.0-ci
+
+      - name: Helm lint (production)
+        run: |
+          helm lint deploy/helm/telegram-ai-agent \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-production.yaml \
+            --set image.tag=0.0.0-ci
+
+      - name: Helm template (staging) renders cleanly
+        run: |
+          helm template telegram-ai-agent deploy/helm/telegram-ai-agent \
+            --namespace tgai-staging \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-staging.yaml \
+            --set image.tag=0.0.0-ci > /tmp/staging.yaml
+          test -s /tmp/staging.yaml
+          echo "::notice title=Helm::staging render: $(wc -l < /tmp/staging.yaml) lines"
+
+      - name: Helm template (production) renders cleanly
+        run: |
+          helm template telegram-ai-agent deploy/helm/telegram-ai-agent \
+            --namespace tgai-prod \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-production.yaml \
+            --set image.tag=0.0.0-ci > /tmp/prod.yaml
+          test -s /tmp/prod.yaml
+          echo "::notice title=Helm::production render: $(wc -l < /tmp/prod.yaml) lines"
+
+      - name: Helm template (rollouts / canary) renders cleanly
+        run: |
+          helm template telegram-ai-agent deploy/helm/telegram-ai-agent \
+            --namespace tgai-prod \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-production.yaml \
+            --set image.tag=0.0.0-ci \
+            --set backend.rollout.enabled=true > /tmp/canary.yaml
+          grep -q "^# Source: telegram-ai-agent/templates/backend-rollout.yaml" /tmp/canary.yaml
+          if grep -q "^# Source: telegram-ai-agent/templates/backend-deployment.yaml" /tmp/canary.yaml; then
+            echo "ERROR: backend rendered as both Deployment and Rollout"
+            exit 1
+          fi
+
+      - name: Validate Kubernetes manifests against schemas
+        uses: instrumenta/kubeval-action@master
+        continue-on-error: true
+        with:
+          files: /tmp/staging.yaml,/tmp/prod.yaml
+
+  compose-prod-validate:
+    name: docker compose.prod.yml — parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: docker compose config
+        env:
+          POSTGRES_PASSWORD: ci-placeholder
+          DOMAIN: bot.example.com
+          ADMIN_DOMAIN: admin.example.com
+          ACME_EMAIL: ci@example.com
+        run: |
+          touch .env.prod
+          docker compose -f docker/compose.prod.yml --env-file .env.prod config > /tmp/compose.prod.json
+          test -s /tmp/compose.prod.json
