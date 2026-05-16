@@ -6,13 +6,17 @@ on:
     paths:
       - "deploy/**"
       - "docker/compose.prod.yml"
+      - "docker/compose.backup.yml"
       - "docker/Caddyfile.prod"
+      - "docker/backup-crontab"
       - ".github/workflows/deploy.yml"
   pull_request:
     paths:
       - "deploy/**"
       - "docker/compose.prod.yml"
+      - "docker/compose.backup.yml"
       - "docker/Caddyfile.prod"
+      - "docker/backup-crontab"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
 
@@ -96,11 +100,51 @@ jobs:
             exit 1
           fi
 
+      - name: Helm template (backup enabled) renders cleanly
+        run: |
+          helm template telegram-ai-agent deploy/helm/telegram-ai-agent \
+            --namespace tgai-prod \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-production.yaml \
+            --set image.tag=0.0.0-ci \
+            --set backup.enabled=true \
+            --set backup.s3.bucket=ci-bucket \
+            --set backup.s3.region=eu-central-1 \
+            --set backup.image.repository=ghcr.io/labtgbot/telegram-ai-agent/backup \
+            --set backup.image.tag=0.0.0-ci > /tmp/backup.yaml
+          test -s /tmp/backup.yaml
+          # Sanity-check that CronJobs were rendered.
+          cron_count=$(grep -c "^kind: CronJob$" /tmp/backup.yaml || true)
+          if [ "$cron_count" -lt 4 ]; then
+            echo "ERROR: expected >= 4 CronJobs when backup enabled, got $cron_count"
+            exit 1
+          fi
+          echo "::notice title=Helm::backup render: $cron_count CronJobs, $(wc -l < /tmp/backup.yaml) lines"
+
       - name: Validate Kubernetes manifests against schemas
         uses: instrumenta/kubeval-action@master
         continue-on-error: true
         with:
-          files: /tmp/staging.yaml,/tmp/prod.yaml
+          files: /tmp/staging.yaml,/tmp/prod.yaml,/tmp/backup.yaml
+
+  backup-scripts-test:
+    name: Backup scripts — shellcheck + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Shellcheck backup scripts
+        run: |
+          shellcheck -x \
+            deploy/backup/scripts/*.sh \
+            deploy/backup/scripts/lib/*.sh \
+            deploy/backup/tests/run-tests.sh
+
+      - name: Run backup helper unit tests
+        run: bash deploy/backup/tests/run-tests.sh
 
   compose-prod-validate:
     name: docker compose.prod.yml — parse
@@ -118,3 +162,30 @@ jobs:
           touch .env.prod
           docker compose -f docker/compose.prod.yml --env-file .env.prod config > /tmp/compose.prod.json
           test -s /tmp/compose.prod.json
+
+  compose-backup-validate:
+    name: docker compose.backup.yml — parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: docker compose config (compose.prod.yml + compose.backup.yml)
+        env:
+          POSTGRES_PASSWORD: ci-placeholder
+          DOMAIN: bot.example.com
+          ADMIN_DOMAIN: admin.example.com
+          ACME_EMAIL: ci@example.com
+          BACKUP_S3_BUCKET: ci-bucket
+          BACKUP_S3_REGION: eu-central-1
+          AWS_ACCESS_KEY_ID: ci
+          AWS_SECRET_ACCESS_KEY: ci
+        run: |
+          touch .env.prod
+          docker compose \
+            -f docker/compose.prod.yml \
+            -f docker/compose.backup.yml \
+            --env-file .env.prod config > /tmp/compose.backup.json
+          test -s /tmp/compose.backup.json
+          jq -r '.services | keys[]' /tmp/compose.backup.json | sort > /tmp/svc.txt
+          grep -qx backup-supervisor /tmp/svc.txt
+          grep -qx backup-runner /tmp/svc.txt
