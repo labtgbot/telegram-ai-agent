@@ -78,3 +78,58 @@ jobs:
           name: mini-app-dist
           path: mini-app/dist
           if-no-files-found: ignore
+
+  e2e:
+    name: Playwright e2e
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect package.json
+        id: detect
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ -f mini-app/package.json ] && [ -d mini-app/tests/e2e ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Mini App e2e::No mini-app/tests/e2e — skipping."
+          fi
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        if: steps.detect.outputs.ready == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mini-app/package-lock.json
+
+      - name: Install dependencies
+        if: steps.detect.outputs.ready == 'true'
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install --no-audit --no-fund
+          fi
+
+      - name: Install Playwright browsers (Chromium + deps)
+        if: steps.detect.outputs.ready == 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright e2e
+        if: steps.detect.outputs.ready == 'true'
+        run: npm run test:e2e
+        env:
+          CI: "1"
+
+      - name: Upload Playwright report
+        if: always() && steps.detect.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: mini-app-playwright-report
+          path: |
+            mini-app/playwright-report
+            mini-app/test-results
+          if-no-files-found: ignore

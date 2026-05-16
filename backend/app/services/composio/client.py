@@ -20,6 +20,7 @@ cancelled request never blocks on backoff.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any, Protocol, runtime_checkable
 
@@ -34,7 +35,7 @@ from app.services.composio.errors import (
     ComposioTransientError,
 )
 from app.services.composio.models import ToolInvocation, ToolResult
-from app.services.composio.tools import resolve_tool
+from app.services.composio.tools import SERVICE_TYPE_TO_TOOL, resolve_tool
 
 logger = get_logger(__name__)
 
@@ -266,7 +267,16 @@ def build_client(settings: Settings | None = None) -> ComposioClient:
     cfg = settings or get_settings()
     if not cfg.composio_enabled:
         logger.info("composio.using_mock", reason="missing_api_key")
-        return MockComposioClient(default_user_id=cfg.composio_default_user_id or None)
+        client = MockComposioClient(default_user_id=cfg.composio_default_user_id or None)
+        # Load-test hook: when COMPOSIO_MOCK_TEXT_RESPONSE is set, the mock
+        # returns a text payload the generation pipeline can extract instead
+        # of the default {"echo": params} stub. Lets locust drive the full
+        # /generate/text happy path without a real provider.
+        mock_text = os.environ.get("COMPOSIO_MOCK_TEXT_RESPONSE", "").strip()
+        if mock_text:
+            for tool in {SERVICE_TYPE_TO_TOOL["text"], SERVICE_TYPE_TO_TOOL["chat"]}:
+                client.set_response(tool, data={"text": mock_text})
+        return client
     return HttpComposioClient(
         api_key=cfg.composio_api_key,
         base_url=cfg.composio_base_url,
