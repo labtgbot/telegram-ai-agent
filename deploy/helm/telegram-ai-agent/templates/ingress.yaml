@@ -1,0 +1,54 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "telegram-ai-agent.fullname" . }}
+  labels:
+    {{- include "telegram-ai-agent.labels" . | nindent 4 }}
+  annotations:
+    {{- if .Values.ingress.tls.enabled }}
+    cert-manager.io/cluster-issuer: {{ .Values.clusterIssuer | quote }}
+    {{- end }}
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  ingressClassName: {{ include "telegram-ai-agent.ingressClassName" . }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    {{- range .Values.ingress.hosts }}
+    - hosts:
+        - {{ .host | quote }}
+      secretName: {{ default (printf "%s-tls" .host) $.Values.ingress.tls.secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                {{- if eq .service "backend" }}
+                name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ "name" "backend") }}
+                port:
+                  number: {{ $.Values.backend.service.port }}
+                {{- else if eq .service "miniApp" }}
+                name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ "name" "mini-app") }}
+                port:
+                  number: {{ $.Values.miniApp.service.port }}
+                {{- else if eq .service "admin" }}
+                name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ "name" "admin") }}
+                port:
+                  number: {{ $.Values.admin.service.port }}
+                {{- else }}
+                name: {{ .service }}
+                port:
+                  number: {{ default 80 .servicePort }}
+                {{- end }}
+          {{- end }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,17 @@
+{{- if .Values.miniApp.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "telegram-ai-agent.componentName" (dict "ctx" . "name" "mini-app") }}
+  labels:
+    {{- include "telegram-ai-agent.componentLabels" (dict "ctx" . "name" "mini-app") | nindent 4 }}
+spec:
+  type: {{ .Values.miniApp.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.miniApp.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "telegram-ai-agent.componentSelectorLabels" (dict "ctx" . "name" "mini-app") | nindent 4 }}
+{{- end }}

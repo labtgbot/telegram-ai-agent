@@ -1,0 +1,232 @@
+# Default values for the telegram-ai-agent chart.
+#
+# Values are split per-component so each service can be tuned (image, replicas,
+# probes, HPA, resources) independently. Environment overlays live in
+# values-staging.yaml and values-production.yaml.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Common labels applied to all generated resources.
+commonLabels: {}
+
+# -- Common annotations applied to all generated resources.
+commonAnnotations: {}
+
+image:
+  # Container registry that hosts the per-component images. The chart appends
+  # /<component> to form the final repository (e.g. ghcr.io/labtgbot/telegram-ai-agent/backend).
+  registry: ghcr.io/labtgbot/telegram-ai-agent
+  pullPolicy: IfNotPresent
+  # Default tag applied to every component when its own image.tag is empty.
+  # Release pipelines should override this with the released semver (e.g. "0.1.0").
+  tag: ""
+  # Optional list of ImagePullSecret names (e.g. ghcr-pull). Defaults to empty:
+  # public GHCR images do not need credentials.
+  pullSecrets: []
+
+# -- Cluster ingress class (nginx-ingress by default).
+ingressClassName: nginx
+
+# -- cert-manager ClusterIssuer used by the chart's Ingress.
+clusterIssuer: letsencrypt-prod
+
+# Shared environment variables injected into every backend pod (api + bot +
+# workers). Values are read from the SealedSecret/ExternalSecret rendered
+# separately under deploy/k8s/secrets.
+secret:
+  # Name of the Kubernetes Secret holding sensitive backend env vars.
+  name: telegram-ai-agent-backend
+  # When `create: true`, the chart renders a placeholder Secret with the keys
+  # listed in `defaults`. Real environments leave this `false` and provision
+  # the Secret via sealed-secrets / external-secrets instead.
+  create: false
+  defaults:
+    TELEGRAM_BOT_TOKEN: ""
+    TELEGRAM_WEBHOOK_SECRET: ""
+    APP_SECRET: ""
+    ADMIN_JWT_SECRET: ""
+    DATABASE_URL: ""
+    REDIS_URL: ""
+    COMPOSIO_API_KEY: ""
+    GEMINI_API_KEY: ""
+    ANTHROPIC_API_KEY: ""
+    OPENAI_API_KEY: ""
+    PAYMENT_PROVIDER_TOKEN: ""
+
+# Non-secret environment vars injected into the backend pods.
+config:
+  APP_ENV: production
+  APP_DEBUG: "false"
+  LOG_LEVEL: INFO
+  LOG_FORMAT: json
+  API_V1_PREFIX: /api/v1
+  HEALTH_CHECK_TIMEOUT: "2.0"
+  TELEGRAM_API_BASE_URL: https://api.telegram.org
+  TELEGRAM_SET_COMMANDS_ON_STARTUP: "true"
+  COMPOSIO_BASE_URL: https://backend.composio.dev
+  PAYMENT_CURRENCY: XTR
+
+# -----------------------------------------------------------------------------
+# Backend API (FastAPI: REST + bot webhook)
+# -----------------------------------------------------------------------------
+backend:
+  enabled: true
+  image:
+    repository: backend
+    tag: ""
+  replicaCount: 2
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: /metrics
+  serviceAccount:
+    create: true
+    name: ""
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  probes:
+    liveness:
+      path: /api/v1/health/live
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+    readiness:
+      path: /api/v1/health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+    startup:
+      path: /api/v1/health/live
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 30
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  # Use Argo Rollouts instead of a vanilla Deployment when `rollout.enabled`.
+  rollout:
+    enabled: false
+    strategy: canary
+    canary:
+      steps:
+        - setWeight: 20
+        - pause: { duration: 60 }
+        - setWeight: 50
+        - pause: { duration: 120 }
+        - setWeight: 100
+  extraEnv: []
+
+# -----------------------------------------------------------------------------
+# Celery worker (optional; off until image is built — Phase 4 follow-up).
+# -----------------------------------------------------------------------------
+worker:
+  enabled: false
+  image:
+    repository: backend
+    tag: ""
+  replicaCount: 1
+  command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=INFO"]
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+
+# -----------------------------------------------------------------------------
+# Mini App (React static bundle served by nginx).
+# -----------------------------------------------------------------------------
+miniApp:
+  enabled: true
+  image:
+    repository: mini-app
+    tag: ""
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  autoscaling:
+    enabled: false
+
+# -----------------------------------------------------------------------------
+# Admin dashboard (Next.js).
+# -----------------------------------------------------------------------------
+admin:
+  enabled: true
+  image:
+    repository: admin
+    tag: ""
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 3001
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+  autoscaling:
+    enabled: false
+
+# -----------------------------------------------------------------------------
+# Ingress (nginx-ingress + cert-manager).
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: ""  # falls back to .Values.ingressClassName
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+  hosts:
+    - host: bot.example.com
+      paths:
+        - path: /api/
+          pathType: Prefix
+          service: backend
+        - path: /
+          pathType: Prefix
+          service: miniApp
+    - host: admin.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: admin
+  tls:
+    enabled: true
+    # Leave secretName empty to let cert-manager generate the Secret using
+    # the host as suffix. Set explicitly when reusing an existing certificate.
+    secretName: ""

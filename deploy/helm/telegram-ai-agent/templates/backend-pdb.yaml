@@ -1,0 +1,13 @@
+{{- if and .Values.backend.enabled .Values.backend.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "telegram-ai-agent.componentName" (dict "ctx" . "name" "backend") }}
+  labels:
+    {{- include "telegram-ai-agent.componentLabels" (dict "ctx" . "name" "backend") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.backend.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "telegram-ai-agent.componentSelectorLabels" (dict "ctx" . "name" "backend") | nindent 6 }}
+{{- end }}
