@@ -10,6 +10,13 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_ADMIN_JWT_SECRET = "change-me"  # noqa: S105 — sentinel, not a real secret
+DEFAULT_APP_SECRET = "change-me"  # noqa: S105 — sentinel, not a real secret
+
+
+class InsecureDefaultSecretError(RuntimeError):
+    """Raised when a placeholder secret leaks into a non-development env."""
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -134,8 +141,12 @@ class Settings(BaseSettings):
     )
 
     admin_jwt_secret: str = Field(
-        default="change-me",
-        description="HS256 secret used to sign admin JWT tokens.",
+        default=DEFAULT_ADMIN_JWT_SECRET,
+        description=(
+            "HS256 secret used to sign admin JWT tokens. The placeholder "
+            "default is rejected at startup outside development — see "
+            "Settings.assert_production_safe()."
+        ),
     )
     admin_jwt_algorithm: str = Field(
         default="HS256",
@@ -251,6 +262,28 @@ class Settings(BaseSettings):
             if value > 0:
                 out.append(value)
         return tuple(out) if out else (10,)
+
+    def assert_production_safe(self) -> None:
+        """Fail loudly when a placeholder secret leaks into a real environment.
+
+        Called from the app lifespan. In development (``APP_ENV`` in
+        ``{development, dev, local, test, ci}``) placeholders are tolerated
+        so contributors can run ``uvicorn --reload`` without touching env
+        files. Outside that, ``InsecureDefaultSecretError`` is raised before
+        the API starts serving — this is the safety net required by
+        ``docs/security/audit-report.md`` finding F-001.
+        """
+        if self.app_env.lower() in {"development", "dev", "local", "test", "ci"}:
+            return
+        offenders: list[str] = []
+        if (self.admin_jwt_secret or "").strip() in {"", DEFAULT_ADMIN_JWT_SECRET}:
+            offenders.append("ADMIN_JWT_SECRET")
+        if offenders:
+            raise InsecureDefaultSecretError(
+                "Refusing to start with placeholder secret(s) in "
+                f"app_env={self.app_env!r}: {', '.join(offenders)}. "
+                "Override the value(s) via environment / sealed secret."
+            )
 
     @property
     def super_admin_ids(self) -> set[int]:

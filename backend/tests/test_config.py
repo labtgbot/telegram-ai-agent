@@ -74,3 +74,53 @@ def test_configure_logging_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> Non
 
     logger = logging_module.get_logger("test")
     logger.info("hello", key="value")
+
+
+def _fresh_config_module():
+    """Re-import config module so tests see consistent class identity.
+
+    Earlier tests in this file call ``importlib.reload(config_module)``,
+    which replaces ``Settings`` / ``InsecureDefaultSecretError`` with
+    new class objects. Importing inside each test keeps assertions
+    aligned with whatever class identity is current at call time.
+    """
+    from app.core import config as config_module
+
+    return config_module
+
+
+def test_assert_production_safe_blocks_default_jwt_secret() -> None:
+    config_module = _fresh_config_module()
+    settings = config_module.Settings(
+        app_env="production",
+        admin_jwt_secret="change-me",
+    )
+    with pytest.raises(config_module.InsecureDefaultSecretError) as excinfo:
+        settings.assert_production_safe()
+    assert "ADMIN_JWT_SECRET" in str(excinfo.value)
+
+
+def test_assert_production_safe_blocks_empty_jwt_secret() -> None:
+    config_module = _fresh_config_module()
+    settings = config_module.Settings(
+        app_env="staging",
+        admin_jwt_secret="",
+    )
+    with pytest.raises(config_module.InsecureDefaultSecretError):
+        settings.assert_production_safe()
+
+
+def test_assert_production_safe_allows_dev_with_default_secret() -> None:
+    config_module = _fresh_config_module()
+    for env in ("development", "local", "test", "ci"):
+        config_module.Settings(
+            app_env=env, admin_jwt_secret="change-me"
+        ).assert_production_safe()
+
+
+def test_assert_production_safe_allows_custom_secret_in_production() -> None:
+    config_module = _fresh_config_module()
+    config_module.Settings(
+        app_env="production",
+        admin_jwt_secret="a-real-long-random-secret-9f8e",
+    ).assert_production_safe()

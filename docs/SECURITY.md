@@ -1,5 +1,18 @@
 # Security Best Practices
 
+> Связанные документы:
+>
+> - [`../SECURITY.md`](../SECURITY.md) — политика ответственного раскрытия
+>   уязвимостей (как сообщить о проблеме).
+> - [`security/threat-model.md`](security/threat-model.md) — STRIDE-модель
+>   угроз production-компонентов.
+> - [`security/owasp-top10.md`](security/owasp-top10.md) — соответствие
+>   OWASP Top-10 (2021).
+> - [`security/pentest-scope.md`](security/pentest-scope.md) — scope
+>   ручного пентеста.
+> - [`security/audit-report.md`](security/audit-report.md) — отчёт по
+>   найденным P0/P1/P2 + статусы устранения.
+
 ## Authentication
 
 - **User**: Telegram WebApp `initData` подписывается ботом, верификация HMAC по `bot_token`.

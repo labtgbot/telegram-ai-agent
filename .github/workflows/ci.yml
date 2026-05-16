@@ -15,9 +15,12 @@ jobs:
       - name: Verify required docs exist
         run: |
           set -e
-          for f in README.md CONTRIBUTING.md docs/ARCHITECTURE.md docs/ROADMAP.md \
+          for f in README.md CONTRIBUTING.md SECURITY.md \
+                   docs/ARCHITECTURE.md docs/ROADMAP.md \
                    docs/TOKEN_ECONOMY.md docs/DATABASE_SCHEMA.md docs/API_REFERENCE.md \
                    docs/ADMIN_CRM_GUIDE.md docs/SECURITY.md docs/DEPLOYMENT.md \
-                   docs/PRICING_STRATEGY.md; do
+                   docs/PRICING_STRATEGY.md \
+                   docs/security/threat-model.md docs/security/owasp-top10.md \
+                   docs/security/pentest-scope.md docs/security/audit-report.md; do
             test -f "$f" || (echo "Missing required doc: $f" && exit 1)
           done
