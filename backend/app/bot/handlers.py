@@ -749,6 +749,67 @@ async def handle_agent(ctx: HandlerContext) -> None:
     await _run_text_mode(ctx, mode=MODE_AGENT, label="AI agent")
 
 
+def _legal_base_url(settings: Settings) -> str | None:
+    """Return the public origin used to build ``/privacy`` and ``/terms`` links.
+
+    Falls back to the Mini App URL because the same FastAPI app serves both
+    routes (see ``app.main``). Returns ``None`` when the origin is unknown
+    so the handler can degrade gracefully to an inline snippet.
+    """
+    raw = (settings.telegram_mini_app_url or "").strip()
+    if not raw:
+        return None
+    # Strip path/query — the Mini App URL may point to ``/app`` but the
+    # legal docs are mounted at the origin root.
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(raw)
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+async def handle_privacy(ctx: HandlerContext) -> None:
+    """``/privacy`` — link to the public Privacy Policy."""
+    if ctx.chat_id is None:
+        return
+    origin = _legal_base_url(ctx.settings)
+    if origin:
+        text = (
+            "🔒 <b>Privacy Policy</b>\n"
+            f"Read it here: {origin}/privacy\n\n"
+            "It explains what data we collect, why we collect it, and how to "
+            "exercise your GDPR rights (export, deletion, correction)."
+        )
+    else:
+        text = (
+            "🔒 <b>Privacy Policy</b>\n"
+            "Open the Mini App for the full document, or contact support if "
+            "you can't access it."
+        )
+    await ctx.client.send_message(ctx.chat_id, text)
+
+
+async def handle_terms(ctx: HandlerContext) -> None:
+    """``/terms`` — link to the public Terms of Service."""
+    if ctx.chat_id is None:
+        return
+    origin = _legal_base_url(ctx.settings)
+    if origin:
+        text = (
+            "📜 <b>Terms of Service</b>\n"
+            f"Read them here: {origin}/terms\n\n"
+            "Using the bot or Mini App means you accept these terms."
+        )
+    else:
+        text = (
+            "📜 <b>Terms of Service</b>\n"
+            "Open the Mini App for the full document, or contact support if "
+            "you can't access it."
+        )
+    await ctx.client.send_message(ctx.chat_id, text)
+
+
 async def handle_profile(ctx: HandlerContext) -> None:
     if ctx.chat_id is None or ctx.from_user is None:
         return
@@ -1059,4 +1120,6 @@ COMMAND_HANDLERS = {
     "profile": handle_profile,
     "referral": handle_referral,
     "bonus": handle_bonus,
+    "privacy": handle_privacy,
+    "terms": handle_terms,
 }

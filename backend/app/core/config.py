@@ -107,6 +107,24 @@ class Settings(BaseSettings):
         description="Call setMyCommands when the FastAPI app starts (skipped without token).",
     )
 
+    # ----------------------------------------------------------- age verification
+    compliance_age_gate_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enables the age-verification endpoint stub. Off by default — turn "
+            "on only when a feature gated on 18+ ships. See "
+            "docs/legal/AGE_VERIFICATION.md."
+        ),
+    )
+    compliance_age_gate_provider: str = Field(
+        default="self_declared",
+        description=(
+            "Provider for age verification proofs. ``self_declared`` is "
+            "development-only; production should use ``telegram_passport``, "
+            "``veriff`` or ``yoti`` once integrated."
+        ),
+    )
+
     composio_api_key: str = Field(
         default="",
         description="Composio API key — when empty the mock client is used.",
