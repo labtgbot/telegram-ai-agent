@@ -44,7 +44,7 @@ jobs:
 
       - name: Set up Node ${{ env.NODE_VERSION }}
         if: steps.detect.outputs.ready == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
