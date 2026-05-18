@@ -146,7 +146,7 @@ jobs:
         # integration" — we tolerate that here because the SARIF file is
         # still preserved via `actions/upload-artifact` below.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: bandit.sarif
           category: bandit
@@ -200,7 +200,7 @@ jobs:
         # See "Upload Bandit SARIF" — tolerate Code-Scanning-disabled
         # repos; the artifact upload below keeps the SARIF reachable.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -261,7 +261,7 @@ jobs:
         # See "Upload Bandit SARIF" — tolerate Code-Scanning-disabled
         # repos; the artifact upload below keeps the SARIF reachable.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
@@ -315,7 +315,7 @@ jobs:
         # See "Upload Bandit SARIF" — tolerate Code-Scanning-disabled
         # repos; the artifact upload below keeps the SARIF reachable.
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-image-backend.sarif
           category: trivy-image-backend
