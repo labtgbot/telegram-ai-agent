@@ -1,9 +1,15 @@
-"""Endpoint-level tests for ``/api/v1/user/balance`` and
-``/api/v1/user/usage-history``.
+"""Endpoint-level tests for ``/api/v1/user/*``.
 
 DB and auth dependencies are stubbed with in-memory fakes so the suite
 runs without external services.  The shape of the fixture follows
 ``test_auth_endpoints.py`` for consistency.
+
+Covered routes:
+
+* ``GET /api/v1/user/balance``
+* ``GET /api/v1/user/usage-history``
+* ``GET /api/v1/user/transactions`` (Mini App balance page history)
+* ``GET /api/v1/user/referral`` (Mini App referral link)
 """
 from __future__ import annotations
 
@@ -26,6 +32,7 @@ class _Settings:
     app_env = "development"
     app_debug = True
     telegram_bot_token = BOT_TOKEN
+    telegram_bot_username = "test_ai_bot"
     telegram_init_data_max_age = 600
     admin_jwt_secret = JWT_SECRET
     admin_jwt_algorithm = "HS256"
@@ -114,6 +121,38 @@ class _UsageHistoryPageStub:
         self.has_more = (page * limit) < total
 
 
+class FakeTransaction:
+    """In-memory stand-in for :class:`app.models.transaction.Transaction`.
+
+    Mirrors only the fields the ``/user/transactions`` endpoint reads.
+    """
+
+    def __init__(
+        self,
+        *,
+        id: int,
+        user_id: int,
+        transaction_type: str,
+        tokens_amount: int,
+        stars_amount: int | None = None,
+        package_name: str | None = None,
+        payment_status: str | None = None,
+        payment_method: str | None = None,
+        created_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
+        self.id = id
+        self.user_id = user_id
+        self.transaction_type = transaction_type
+        self.tokens_amount = tokens_amount
+        self.stars_amount = stars_amount
+        self.package_name = package_name
+        self.payment_status = payment_status
+        self.payment_method = payment_method
+        self.created_at = created_at or datetime.now(UTC)
+        self.completed_at = completed_at
+
+
 @pytest.fixture
 def fake_settings() -> _Settings:
     return _Settings()
@@ -138,7 +177,56 @@ def usage_logs() -> list[FakeUsageLog]:
 
 
 @pytest.fixture
-def build_app(monkeypatch, fake_settings, stub_user, usage_logs):
+def fake_transactions() -> list[FakeTransaction]:
+    """A small ledger covering every transaction type the API exposes."""
+    base = datetime(2026, 5, 1, 12, 0, 0, tzinfo=UTC)
+    return [
+        FakeTransaction(
+            id=1,
+            user_id=42,
+            transaction_type="purchase",
+            tokens_amount=500,
+            stars_amount=250,
+            package_name="starter",
+            payment_status="completed",
+            payment_method="telegram_stars",
+            created_at=base,
+            completed_at=base,
+        ),
+        FakeTransaction(
+            id=2,
+            user_id=42,
+            transaction_type="bonus",
+            tokens_amount=50,
+            package_name="daily_bonus",
+            created_at=base.replace(day=2),
+        ),
+        FakeTransaction(
+            id=3,
+            user_id=42,
+            transaction_type="spend",
+            tokens_amount=-20,
+            created_at=base.replace(day=3),
+        ),
+        FakeTransaction(
+            id=4,
+            user_id=42,
+            transaction_type="refund",
+            tokens_amount=20,
+            created_at=base.replace(day=4),
+        ),
+        FakeTransaction(
+            id=5,
+            user_id=42,
+            transaction_type="manual_bonus",
+            tokens_amount=100,
+            created_at=base.replace(day=5),
+        ),
+    ]
+
+
+@pytest.fixture
+def build_app(monkeypatch, fake_settings, stub_user, usage_logs, fake_transactions):
     """Return an app with all DB and dependency surfaces stubbed in memory."""
     from app.api.v1 import user as user_module
     from app.auth import dependencies as deps
@@ -212,6 +300,33 @@ def build_app(monkeypatch, fake_settings, stub_user, usage_logs):
         user_module, "_daily_bonus_available", fake_daily_bonus_available
     )
 
+    # Patch the transactions query so the endpoint can be tested without a DB.
+    async def fake_list_transactions(
+        session, *, user_id, page, limit, transaction_type
+    ):
+        rows = [t for t in fake_transactions if t.user_id == user_id]
+        if transaction_type and transaction_type in {
+            "purchase",
+            "spend",
+            "bonus",
+            "refund",
+            "manual_bonus",
+        }:
+            rows = [t for t in rows if t.transaction_type == transaction_type]
+        rows_sorted = sorted(
+            rows, key=lambda t: (t.created_at, t.id), reverse=True
+        )
+        total = len(rows_sorted)
+        offset = (page - 1) * limit
+        page_rows = rows_sorted[offset : offset + limit]
+        return user_module._TransactionsPage(
+            items=page_rows, total=total, page=page, limit=limit
+        )
+
+    monkeypatch.setattr(
+        user_module, "_list_transactions", fake_list_transactions
+    )
+
     app = create_app()
 
     from app.auth.dependencies import _settings_dep
@@ -223,7 +338,7 @@ def build_app(monkeypatch, fake_settings, stub_user, usage_logs):
     app.dependency_overrides[real_get_session] = _yield_none
     app.dependency_overrides[_settings_dep] = lambda: fake_settings
 
-    return app, store, daily_bonus_cooldown, usage_logs
+    return app, store, daily_bonus_cooldown, usage_logs, fake_transactions
 
 
 def _build_init_data(telegram_id: int = 42) -> str:
@@ -249,7 +364,7 @@ async def _client(app: Any) -> AsyncClient:
 
 @pytest.mark.asyncio
 async def test_balance_returns_current_state(build_app) -> None:
-    app, _store, _cooldown, _ = build_app
+    app, *_ = build_app
     init = _build_init_data(telegram_id=42)
     async with await _client(app) as c:
         resp = await c.get(
@@ -266,7 +381,7 @@ async def test_balance_returns_current_state(build_app) -> None:
 
 @pytest.mark.asyncio
 async def test_balance_reflects_daily_bonus_cooldown(build_app) -> None:
-    app, _store, cooldown, _ = build_app
+    app, _store, cooldown, *_ = build_app
     cooldown[42] = True
     init = _build_init_data(telegram_id=42)
     async with await _client(app) as c:
@@ -280,7 +395,7 @@ async def test_balance_reflects_daily_bonus_cooldown(build_app) -> None:
 
 @pytest.mark.asyncio
 async def test_balance_for_premium_user_returns_expires_at(build_app) -> None:
-    app, store, _cooldown, _ = build_app
+    app, store, *_ = build_app
     expires = datetime(2026, 12, 31, tzinfo=UTC)
     store[42] = FakeUser(
         id=42,
@@ -386,3 +501,231 @@ async def test_usage_history_requires_init_data(build_app) -> None:
         resp = await c.get("/api/v1/user/usage-history")
     assert resp.status_code == 401
     assert resp.json()["detail"] == "missing_init_data"
+
+
+# ---------------------------------------------------------- /user/transactions
+
+
+@pytest.mark.asyncio
+async def test_transactions_default_page_returns_all(build_app) -> None:
+    app, *_ = build_app
+    init = _build_init_data(telegram_id=42)
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/transactions",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] == 5
+    assert body["page"] == 1
+    assert body["limit"] == 20
+    assert body["has_more"] is False
+    assert len(body["items"]) == 5
+    # Newest first (May 5 → May 1).
+    assert body["items"][0]["id"] == 5
+    assert body["items"][-1]["id"] == 1
+    assert {item["transaction_type"] for item in body["items"]} == {
+        "purchase",
+        "spend",
+        "bonus",
+        "refund",
+        "manual_bonus",
+    }
+
+
+@pytest.mark.asyncio
+async def test_transactions_returns_full_purchase_shape(build_app) -> None:
+    app, *_ = build_app
+    init = _build_init_data(telegram_id=42)
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/transactions?type=purchase",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    purchase = body["items"][0]
+    assert purchase["transaction_type"] == "purchase"
+    assert purchase["tokens_amount"] == 500
+    assert purchase["stars_amount"] == 250
+    assert purchase["package_name"] == "starter"
+    assert purchase["payment_status"] == "completed"
+    assert purchase["payment_method"] == "telegram_stars"
+    assert purchase["completed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_transactions_filter_by_type(build_app) -> None:
+    app, *_ = build_app
+    init = _build_init_data(telegram_id=42)
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/transactions?type=bonus",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["total"] == 1
+    assert body["items"][0]["transaction_type"] == "bonus"
+    assert body["items"][0]["package_name"] == "daily_bonus"
+
+
+@pytest.mark.asyncio
+async def test_transactions_unknown_type_is_silently_ignored(build_app) -> None:
+    app, *_ = build_app
+    init = _build_init_data(telegram_id=42)
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/transactions?type=ghost",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    assert resp.status_code == 200
+    # Unknown filter is dropped -> all 5 are returned.
+    assert resp.json()["total"] == 5
+
+
+@pytest.mark.asyncio
+async def test_transactions_pagination_marks_has_more(build_app) -> None:
+    app, *_ = build_app
+    init = _build_init_data(telegram_id=42)
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/transactions?page=1&limit=2",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["page"] == 1
+    assert body["limit"] == 2
+    assert body["total"] == 5
+    assert body["has_more"] is True
+    assert [item["id"] for item in body["items"]] == [5, 4]
+
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/transactions?page=3&limit=2",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    body = resp.json()
+    assert resp.status_code == 200
+    assert [item["id"] for item in body["items"]] == [1]
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+async def test_transactions_rejects_invalid_pagination(build_app) -> None:
+    app, *_ = build_app
+    init = _build_init_data(telegram_id=42)
+    async with await _client(app) as c:
+        resp_zero = await c.get(
+            "/api/v1/user/transactions?page=0",
+            headers={"X-Telegram-Init-Data": init},
+        )
+        resp_big = await c.get(
+            "/api/v1/user/transactions?limit=1000",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    assert resp_zero.status_code == 422
+    assert resp_big.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_transactions_requires_init_data(build_app) -> None:
+    app, *_ = build_app
+    async with await _client(app) as c:
+        resp = await c.get("/api/v1/user/transactions")
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "missing_init_data"
+
+
+@pytest.mark.asyncio
+async def test_transactions_rejects_tampered_init_data(build_app) -> None:
+    app, *_ = build_app
+    init = _build_init_data().replace("Alice", "Mallory")
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/transactions",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "invalid_init_data"
+
+
+# --------------------------------------------------------------- /user/referral
+
+
+@pytest.mark.asyncio
+async def test_referral_builds_https_link_when_bot_username_set(build_app) -> None:
+    app, *_ = build_app
+    init = _build_init_data(telegram_id=42)
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/referral",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["referral_code"] == "REF-42"
+    assert body["start_param"] == "ref_REF-42"
+    assert body["bot_username"] == "test_ai_bot"
+    assert body["referral_link"] == "https://t.me/test_ai_bot?start=ref_REF-42"
+
+
+@pytest.mark.asyncio
+async def test_referral_strips_leading_at_from_bot_username(
+    build_app, fake_settings
+) -> None:
+    fake_settings.telegram_bot_username = "@another_bot"
+    app, *_ = build_app
+    init = _build_init_data(telegram_id=42)
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/referral",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["bot_username"] == "another_bot"
+    assert body["referral_link"].startswith("https://t.me/another_bot?start=ref_")
+
+
+@pytest.mark.asyncio
+async def test_referral_falls_back_to_tg_resolve_when_username_blank(
+    build_app, fake_settings
+) -> None:
+    fake_settings.telegram_bot_username = ""
+    app, *_ = build_app
+    init = _build_init_data(telegram_id=42)
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/referral",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["bot_username"] is None
+    assert body["referral_link"] == "tg://resolve?start=ref_REF-42"
+
+
+@pytest.mark.asyncio
+async def test_referral_requires_init_data(build_app) -> None:
+    app, *_ = build_app
+    async with await _client(app) as c:
+        resp = await c.get("/api/v1/user/referral")
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "missing_init_data"
+
+
+@pytest.mark.asyncio
+async def test_referral_rejects_tampered_init_data(build_app) -> None:
+    app, *_ = build_app
+    init = _build_init_data().replace("Alice", "Mallory")
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/referral",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "invalid_init_data"
