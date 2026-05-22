@@ -4,7 +4,7 @@ import { installTelegramMock, mockApi } from "./helpers/telegram-mock";
 
 test.describe("onboarding via Telegram WebApp mock", () => {
   test("seeds the user from initDataUnsafe and greets them on the home page", async ({ page }) => {
-    await installTelegramMock(page, {
+    const telegram = await installTelegramMock(page, {
       user: {
         id: 100200,
         first_name: "Ada",
@@ -22,8 +22,24 @@ test.describe("onboarding via Telegram WebApp mock", () => {
       next_available_at: "2026-05-17T00:00:00+00:00",
       amounts: [10, 12, 15, 20],
     });
+    await mockApi(page, "/users/me", {
+      id: 1,
+      telegram_id: 100200,
+      username: "ada",
+      first_name: "Ada",
+      last_name: "Lovelace",
+      language_code: "en",
+      role: "user",
+      referral_code: "ADA-CODE",
+      is_premium: false,
+      is_banned: false,
+      photo_url: null,
+      premium_expires_at: null,
+      created_at: "2025-01-01T00:00:00+00:00",
+      totp_enabled: false,
+    });
 
-    await page.goto("/");
+    await telegram.goto();
 
     await expect(page.getByTestId("active-scheme")).toHaveText(/light|dark/);
     await expect(page.getByText(/Hi Ada/)).toBeVisible();
@@ -31,7 +47,7 @@ test.describe("onboarding via Telegram WebApp mock", () => {
   });
 
   test("hydrates the profile page from the Telegram identity", async ({ page }) => {
-    await installTelegramMock(page, {
+    const telegram = await installTelegramMock(page, {
       user: {
         id: 100201,
         first_name: "Grace",
@@ -62,7 +78,7 @@ test.describe("onboarding via Telegram WebApp mock", () => {
       { method: "GET" },
     );
 
-    await page.goto("/profile");
+    await telegram.goto("/profile");
 
     await expect(page.getByTestId("profile-name")).toHaveText("Grace Hopper");
     await expect(page.getByTestId("profile-username")).toHaveText("@grace");
