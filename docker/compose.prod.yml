@@ -1,0 +1,129 @@
+# Production-like docker compose stack.
+#
+# Designed for single-host deployments / staging shells where Kubernetes is
+# overkill. The Helm chart in deploy/helm/telegram-ai-agent is the supported
+# production target — this file is a fallback. Compared to compose.yml it:
+#
+#   * pulls pre-built images from GHCR instead of building from source
+#   * runs uvicorn with multiple workers, no --reload, no source mount
+#   * resolves env from .env.prod (kept out of git)
+#   * adds Caddy in front for TLS termination + reverse proxy
+#
+# Usage:
+#   cp .env.example .env.prod && $EDITOR .env.prod
+#   docker compose -f docker/compose.prod.yml --env-file .env.prod pull
+#   docker compose -f docker/compose.prod.yml --env-file .env.prod up -d
+#   docker compose -f docker/compose.prod.yml exec backend alembic upgrade head
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: tgai-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-bot.example.com}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:-admin.example.com}
+      ACME_EMAIL: ${ACME_EMAIL:-ops@example.com}
+    volumes:
+      - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/labtgbot/telegram-ai-agent/backend:latest}
+    container_name: tgai-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ../.env.prod
+    environment:
+      APP_ENV: production
+      APP_DEBUG: "false"
+      LOG_LEVEL: INFO
+      LOG_FORMAT: json
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/telegram_ai_agent
+      REDIS_URL: redis://redis:6379/0
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health/live').status == 200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    command:
+      - uvicorn
+      - app.main:app
+      - --host=0.0.0.0
+      - --port=8000
+      - --workers=4
+      - --no-access-log
+
+  mini-app:
+    image: ${MINI_APP_IMAGE:-ghcr.io/labtgbot/telegram-ai-agent/mini-app:latest}
+    container_name: tgai-mini-app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/"]
+      interval: 30s
+      timeout: 3s
+      retries: 5
+
+  admin:
+    image: ${ADMIN_IMAGE:-ghcr.io/labtgbot/telegram-ai-agent/admin:latest}
+    container_name: tgai-admin
+    restart: unless-stopped
+    env_file:
+      - ../.env.prod
+    environment:
+      PORT: "3001"
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3001/ >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: tgai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.prod}
+      POSTGRES_DB: telegram_ai_agent
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d telegram_ai_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: tgai-redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

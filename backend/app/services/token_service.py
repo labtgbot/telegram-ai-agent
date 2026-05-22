@@ -33,9 +33,11 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.core.metrics import observe_spend
 from app.models.token_usage_log import TokenUsageLog
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.services.balance_cache import BalanceCache
 
 logger = get_logger(__name__)
 
@@ -133,10 +135,22 @@ class TokenService:
     the caller (typically an API endpoint) controls the outer
     transaction.  All write methods take ``SELECT ... FOR UPDATE`` row
     locks so concurrent calls are serialised on the user row.
+
+    Pass a :class:`BalanceCache` to enable the Redis write-through layer
+    (issue #36): :meth:`get_balance` will hit Redis first and the write
+    methods will refresh / invalidate the cached value as they mutate
+    ``users.token_balance``.  When ``balance_cache`` is omitted the
+    service falls back to the pre-cache behaviour, which keeps tests
+    that build a service with only a session working unchanged.
     """
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        balance_cache: BalanceCache | None = None,
+    ) -> None:
         self.session = session
+        self._balance_cache = balance_cache
 
     # ------------------------------------------------------------- internal
 
@@ -157,13 +171,28 @@ class TokenService:
     # ------------------------------------------------------------- queries
 
     async def get_balance(self, user_id: int) -> int:
-        """Return the current token balance (no lock taken)."""
+        """Return the current token balance (no lock taken).
+
+        Reads go through the optional :class:`BalanceCache` first; on a
+        miss we fetch from the DB and write the value back so the next
+        request can serve from Redis. The cache is invalidated by every
+        mutating method on this service, so a hit is always consistent
+        with the last committed write.
+        """
+        if self._balance_cache is not None:
+            cached = await self._balance_cache.get(user_id)
+            if cached is not None:
+                return cached
+
         stmt = select(User.token_balance).where(User.id == user_id)
         result = await self.session.execute(stmt)
         balance = result.scalar_one_or_none()
         if balance is None:
             raise UserNotFoundError(f"user {user_id} not found")
-        return int(balance)
+        balance_int = int(balance)
+        if self._balance_cache is not None:
+            await self._balance_cache.set(user_id, balance_int)
+        return balance_int
 
     async def usage_history(
         self,
@@ -204,6 +233,28 @@ class TokenService:
         stmt = select(User.id).where(User.id == user_id)
         if (await self.session.execute(stmt)).scalar_one_or_none() is None:
             raise UserNotFoundError(f"user {user_id} not found")
+
+    async def _refresh_cache(self, user_id: int, new_balance: int) -> None:
+        """Push the post-mutation balance into Redis, write-through.
+
+        Mutations always flush inside the caller's transaction — we
+        write to the cache *before* commit on purpose: the cache is a
+        read-aside accelerator, not a source of truth, and writing
+        early lets the next read in the same request hit Redis. If the
+        outer transaction is rolled back the next mutation (or the TTL)
+        will reconcile the drift, and :class:`BalanceCache` failures
+        are swallowed so a Redis outage cannot break a billable spend.
+        """
+        if self._balance_cache is None:
+            return
+        try:
+            await self._balance_cache.set(user_id, int(new_balance))
+        except Exception as exc:  # noqa: BLE001 — caching is best-effort
+            logger.warning(
+                "balance_cache.set_failed",
+                user_id=user_id,
+                error=str(exc),
+            )
 
     # ----------------------------------------------------------------- add
 
@@ -262,6 +313,8 @@ class TokenService:
         )
         self.session.add(tx)
         await self.session.flush()
+
+        await self._refresh_cache(user.id, int(user.token_balance))
 
         logger.info(
             "tokens.add",
@@ -338,6 +391,8 @@ class TokenService:
         self.session.add(usage)
         await self.session.flush()
 
+        await self._refresh_cache(user.id, int(user.token_balance))
+
         logger.info(
             "tokens.spend",
             user_id=user.id,
@@ -348,6 +403,7 @@ class TokenService:
             new_balance=user.token_balance,
             meta=meta or None,
         )
+        observe_spend(service=service, tokens=amount)
         return SpendResult(
             user_id=user.id,
             amount=amount,
@@ -471,6 +527,8 @@ class TokenService:
         )
         self.session.add(tx)
         await self.session.flush()
+
+        await self._refresh_cache(user.id, int(user.token_balance))
 
         logger.info(
             "tokens.refund",

@@ -25,6 +25,7 @@ class BotCommand:
 BOT_COMMANDS: tuple[BotCommand, ...] = (
     BotCommand("start", "Запустить бота и получить бонус"),
     BotCommand("balance", "Показать баланс токенов"),
+    BotCommand("bonus", "Ежедневный бонус и стрик"),
     BotCommand("buy", "Купить пакет токенов"),
     BotCommand("ask", "Спросить AI (basic, 1 токен)"),
     BotCommand("agent", "Запустить AI-агента (autonomous, 10 токенов)"),
@@ -32,6 +33,8 @@ BOT_COMMANDS: tuple[BotCommand, ...] = (
     BotCommand("video", "Сгенерировать видео по описанию"),
     BotCommand("profile", "Мой профиль"),
     BotCommand("referral", "Реферальная ссылка"),
+    BotCommand("privacy", "Политика конфиденциальности"),
+    BotCommand("terms", "Пользовательское соглашение"),
     BotCommand("help", "Справка по командам"),
 )
 

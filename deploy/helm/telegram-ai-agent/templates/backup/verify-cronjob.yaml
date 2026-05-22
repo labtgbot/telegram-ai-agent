@@ -1,0 +1,49 @@
+{{- if and .Values.backup.enabled .Values.backup.verify.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "telegram-ai-agent.componentName" (dict "ctx" . "name" "backup-verify") }}
+  labels:
+    {{- include "telegram-ai-agent.componentLabels" (dict "ctx" . "name" "backup") | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.verify.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 7200
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels:
+            {{- include "telegram-ai-agent.componentSelectorLabels" (dict "ctx" . "name" "backup") | nindent 12 }}
+            backup.tgai/job: verify
+        spec:
+          {{- include "telegram-ai-agent.backup.podSpec" . | nindent 10 }}
+          containers:
+            - name: verify
+              image: {{ include "telegram-ai-agent.backup.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["/opt/tgai/backup/verify-backup.sh"]
+              envFrom:
+                {{- include "telegram-ai-agent.backup.envFrom" . | nindent 16 }}
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                - name: aws-cache
+                  mountPath: /home/nobody/.aws/cli
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            - name: aws-cache
+              emptyDir: {}
+{{- end }}

@@ -29,24 +29,37 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Resolve release tag
         id: resolve
+        # Inputs from `workflow_dispatch` are pushed into the shell via
+        # environment variables (never inline `${{ … }}` in a `run:` body)
+        # to prevent shell injection — see
+        # https://docs.github.com/actions/security-guides/security-hardening-for-github-actions#using-an-intermediate-environment-variable
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG="$INPUT_TAG"
           else
             TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          # Reject anything that isn't a SemVer-shaped tag — defence in
+          # depth in case INPUT_TAG ever carries shell metacharacters.
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error title=Invalid tag::'$TAG' is not a valid SemVer tag (vMAJOR.MINOR.PATCH[-pre])"
+            exit 1
           fi
           VERSION="${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.resolve.outputs.tag }}
           name: Release ${{ steps.resolve.outputs.tag }}
@@ -62,7 +75,7 @@ jobs:
       name: staging
       url: ${{ vars.STAGING_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Resolve image references
         id: images
@@ -75,6 +88,27 @@ jobs:
           echo "admin=${{ env.REGISTRY }}/${REPO}/admin:${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.1
+
+      - name: Render manifests (sanity check)
+        env:
+          BACKEND_IMAGE: ${{ steps.images.outputs.backend }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          helm lint deploy/helm/telegram-ai-agent \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-staging.yaml \
+            --set image.tag="${VERSION}"
+          helm template telegram-ai-agent deploy/helm/telegram-ai-agent \
+            --namespace tgai-staging \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-staging.yaml \
+            --set image.tag="${VERSION}" > /tmp/staging.manifests.yaml
+          wc -l /tmp/staging.manifests.yaml
+
       - name: Deploy
         env:
           BACKEND_IMAGE: ${{ steps.images.outputs.backend }}
@@ -82,12 +116,24 @@ jobs:
           ADMIN_IMAGE: ${{ steps.images.outputs.admin }}
           RELEASE_TAG: ${{ steps.images.outputs.tag }}
           STAGING_DEPLOY_HOOK: ${{ secrets.STAGING_DEPLOY_HOOK }}
+          STAGING_KUBECONFIG: ${{ secrets.STAGING_KUBECONFIG }}
+          STAGING_NAMESPACE: ${{ vars.STAGING_NAMESPACE || 'tgai-staging' }}
         run: |
           echo "Deploying ${RELEASE_TAG} to staging"
           echo "  backend  : ${BACKEND_IMAGE}"
           echo "  mini-app : ${MINI_APP_IMAGE}"
           echo "  admin    : ${ADMIN_IMAGE}"
-          if [ -n "${STAGING_DEPLOY_HOOK}" ]; then
+          if [ -n "${STAGING_KUBECONFIG}" ]; then
+            echo "Applying helm release via kubeconfig…"
+            echo "${STAGING_KUBECONFIG}" | base64 -d > /tmp/kubeconfig
+            export KUBECONFIG=/tmp/kubeconfig
+            helm upgrade --install telegram-ai-agent deploy/helm/telegram-ai-agent \
+              --namespace "${STAGING_NAMESPACE}" --create-namespace \
+              -f deploy/helm/telegram-ai-agent/values.yaml \
+              -f deploy/helm/telegram-ai-agent/values-staging.yaml \
+              --set image.tag="${{ needs.release.outputs.version }}" \
+              --wait --timeout 5m
+          elif [ -n "${STAGING_DEPLOY_HOOK}" ]; then
             echo "Triggering staging deploy hook…"
             curl --fail --silent --show-error \
               -X POST \
@@ -95,5 +141,84 @@ jobs:
               -d "{\"tag\":\"${RELEASE_TAG}\",\"backend\":\"${BACKEND_IMAGE}\"}" \
               "${STAGING_DEPLOY_HOOK}"
           else
-            echo "::notice title=Staging::STAGING_DEPLOY_HOOK secret is not set — skipping live deploy. Configure the secret to enable automatic staging rollout."
+            echo "::notice title=Staging::Neither STAGING_KUBECONFIG nor STAGING_DEPLOY_HOOK is configured — skipping live deploy."
+          fi
+
+  deploy-production:
+    name: Deploy to production
+    needs: [release, deploy-staging]
+    runs-on: ubuntu-latest
+    # The `production` GitHub Environment must be configured with required
+    # reviewers — that gate enforces the "production = manual approval"
+    # requirement on every release.
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve image references
+        id: images
+        run: |
+          REPO="${GITHUB_REPOSITORY,,}"
+          TAG="${{ needs.release.outputs.tag }}"
+          VERSION="${{ needs.release.outputs.version }}"
+          echo "backend=${{ env.REGISTRY }}/${REPO}/backend:${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "mini_app=${{ env.REGISTRY }}/${REPO}/mini-app:${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "admin=${{ env.REGISTRY }}/${REPO}/admin:${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.1
+
+      - name: Render manifests (sanity check)
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          helm lint deploy/helm/telegram-ai-agent \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-production.yaml \
+            --set image.tag="${VERSION}"
+          helm template telegram-ai-agent deploy/helm/telegram-ai-agent \
+            --namespace tgai-prod \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-production.yaml \
+            --set image.tag="${VERSION}" > /tmp/prod.manifests.yaml
+          wc -l /tmp/prod.manifests.yaml
+
+      - name: Deploy
+        env:
+          BACKEND_IMAGE: ${{ steps.images.outputs.backend }}
+          MINI_APP_IMAGE: ${{ steps.images.outputs.mini_app }}
+          ADMIN_IMAGE: ${{ steps.images.outputs.admin }}
+          RELEASE_TAG: ${{ steps.images.outputs.tag }}
+          PRODUCTION_DEPLOY_HOOK: ${{ secrets.PRODUCTION_DEPLOY_HOOK }}
+          PRODUCTION_KUBECONFIG: ${{ secrets.PRODUCTION_KUBECONFIG }}
+          PRODUCTION_NAMESPACE: ${{ vars.PRODUCTION_NAMESPACE || 'tgai-prod' }}
+        run: |
+          echo "Deploying ${RELEASE_TAG} to production"
+          echo "  backend  : ${BACKEND_IMAGE}"
+          echo "  mini-app : ${MINI_APP_IMAGE}"
+          echo "  admin    : ${ADMIN_IMAGE}"
+          if [ -n "${PRODUCTION_KUBECONFIG}" ]; then
+            echo "Applying helm release via kubeconfig…"
+            echo "${PRODUCTION_KUBECONFIG}" | base64 -d > /tmp/kubeconfig
+            export KUBECONFIG=/tmp/kubeconfig
+            helm upgrade --install telegram-ai-agent deploy/helm/telegram-ai-agent \
+              --namespace "${PRODUCTION_NAMESPACE}" --create-namespace \
+              -f deploy/helm/telegram-ai-agent/values.yaml \
+              -f deploy/helm/telegram-ai-agent/values-production.yaml \
+              --set image.tag="${{ needs.release.outputs.version }}" \
+              --wait --timeout 10m
+          elif [ -n "${PRODUCTION_DEPLOY_HOOK}" ]; then
+            echo "Triggering production deploy hook…"
+            curl --fail --silent --show-error \
+              -X POST \
+              -H "Content-Type: application/json" \
+              -d "{\"tag\":\"${RELEASE_TAG}\",\"backend\":\"${BACKEND_IMAGE}\"}" \
+              "${PRODUCTION_DEPLOY_HOOK}"
+          else
+            echo "::notice title=Production::Neither PRODUCTION_KUBECONFIG nor PRODUCTION_DEPLOY_HOOK is configured — skipping live deploy."
           fi

@@ -141,6 +141,32 @@ async def test_health_degraded_when_redis_down(
         assert body["components"]["redis"]["status"] == "error"
 
 
+async def test_health_degraded_when_redis_ping_returns_sync_false(
+    fake_engine: MagicMock,
+) -> None:
+    redis = MagicMock()
+    redis.ping.return_value = False
+    redis.aclose = AsyncMock()
+
+    with (
+        patch("app.api.v1.health.get_engine", return_value=fake_engine),
+        patch("app.api.v1.health.get_redis", return_value=redis),
+        patch("app.main.get_engine", return_value=fake_engine),
+    ):
+        from app.main import app
+
+        async with LifespanManager(app), AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/api/v1/health")
+        assert resp.status_code == 503
+        body = resp.json()
+        assert body["status"] == "degraded"
+        assert body["components"]["database"]["status"] == "ok"
+        assert body["components"]["redis"]["status"] == "error"
+        assert body["components"]["redis"]["error"] == "ping returned falsy"
+
+
 async def test_health_degraded_when_db_down(
     fake_engine_fail: MagicMock, fake_redis_ok: MagicMock
 ) -> None:

@@ -178,8 +178,9 @@ def build_app(monkeypatch, fake_settings, stub_user, usage_logs):
 
     # Patch the TokenService to a stub that pulls from the in-memory store.
     class _FakeService:
-        def __init__(self, session):
+        def __init__(self, session, balance_cache=None):
             self.session = session
+            self.balance_cache = balance_cache
 
         async def get_balance(self, user_id: int) -> int:
             for u in store.values():
@@ -205,7 +206,7 @@ def build_app(monkeypatch, fake_settings, stub_user, usage_logs):
     monkeypatch.setattr(user_module, "TokenService", _FakeService)
 
     # Patch the daily-bonus probe so we don't need a Transaction table query.
-    async def fake_daily_bonus_available(session, user_id: int) -> bool:
+    async def fake_daily_bonus_available(session, redis, user_id: int) -> bool:
         return not daily_bonus_cooldown.get(user_id, False)
 
     monkeypatch.setattr(
@@ -222,6 +223,7 @@ def build_app(monkeypatch, fake_settings, stub_user, usage_logs):
 
     app.dependency_overrides[real_get_session] = _yield_none
     app.dependency_overrides[_settings_dep] = lambda: fake_settings
+    app.dependency_overrides[user_module._redis_dep] = lambda: None
 
     return app, store, daily_bonus_cooldown, usage_logs
 

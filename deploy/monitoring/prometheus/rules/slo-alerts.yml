@@ -1,0 +1,155 @@
+groups:
+  - name: telegram-ai-agent.slo
+    interval: 30s
+    rules:
+      # ---------- Availability burn-rate alerts (target 99.5% over 30d) ----------
+      - alert: BackendAvailabilityFastBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{job=~"telegram-ai-agent.*",status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total{job=~"telegram-ai-agent.*"}[5m])), 1)
+          ) > (14.4 * 0.005)
+          and
+          (
+            sum(rate(http_requests_total{job=~"telegram-ai-agent.*",status=~"5.."}[1h]))
+            /
+            clamp_min(sum(rate(http_requests_total{job=~"telegram-ai-agent.*"}[1h])), 1)
+          ) > (14.4 * 0.005)
+        for: 2m
+        labels:
+          severity: page
+          service: backend
+          slo: availability
+        annotations:
+          summary: "Backend availability fast burn (>14.4x budget)"
+          description: |
+            5xx ratio is burning 14.4x the 30-day error budget for both
+            5m and 1h windows. The 30d budget will be exhausted in under
+            ~2 days at this rate. Investigate immediately.
+          runbook_url: "https://github.com/labtgbot/telegram-ai-agent/blob/main/docs/MONITORING.md#availability-fast-burn"
+
+      - alert: BackendAvailabilitySlowBurn
+        expr: |
+          (
+            sum(rate(http_requests_total{job=~"telegram-ai-agent.*",status=~"5.."}[6h]))
+            /
+            clamp_min(sum(rate(http_requests_total{job=~"telegram-ai-agent.*"}[6h])), 1)
+          ) > (6 * 0.005)
+          and
+          (
+            sum(rate(http_requests_total{job=~"telegram-ai-agent.*",status=~"5.."}[24h]))
+            /
+            clamp_min(sum(rate(http_requests_total{job=~"telegram-ai-agent.*"}[24h])), 1)
+          ) > (6 * 0.005)
+        for: 15m
+        labels:
+          severity: ticket
+          service: backend
+          slo: availability
+        annotations:
+          summary: "Backend availability slow burn (>6x budget)"
+          description: |
+            5xx ratio is burning 6x the 30-day error budget for both
+            6h and 24h windows. Investigate before the budget is exhausted.
+          runbook_url: "https://github.com/labtgbot/telegram-ai-agent/blob/main/docs/MONITORING.md#availability-slow-burn"
+
+      # ---------- Read-endpoint latency SLO (p95 < 500ms) ----------
+      - alert: BackendReadLatencyP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(http_request_duration_seconds_bucket{job=~"telegram-ai-agent.*",method="GET"}[5m])
+            )
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: page
+          service: backend
+          slo: latency
+        annotations:
+          summary: "Backend read p95 latency > 500ms for 10m"
+          description: |
+            p95 latency of GET endpoints is above the 500ms SLO for 10
+            minutes. Check upstream dependencies (DB, Redis, Composio,
+            AI providers) and recent deploys.
+          runbook_url: "https://github.com/labtgbot/telegram-ai-agent/blob/main/docs/MONITORING.md#read-latency-slo"
+
+  - name: telegram-ai-agent.infra
+    interval: 30s
+    rules:
+      - alert: BackendInstanceDown
+        expr: up{job=~"telegram-ai-agent.*"} == 0
+        for: 2m
+        labels:
+          severity: page
+          service: backend
+        annotations:
+          summary: "Backend instance {{ $labels.instance }} is down"
+          description: |
+            Prometheus could not scrape the backend at {{ $labels.instance }}
+            for at least 2 minutes.
+          runbook_url: "https://github.com/labtgbot/telegram-ai-agent/blob/main/docs/MONITORING.md#instance-down"
+
+      - alert: BackendHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job=~"telegram-ai-agent.*",status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total{job=~"telegram-ai-agent.*"}[5m])), 1)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: page
+          service: backend
+        annotations:
+          summary: "Backend 5xx rate > 5% for 5m"
+          description: |
+            More than 5% of requests are failing with 5xx for the last
+            5 minutes. Check recent deploys and downstream dependencies.
+
+      - alert: BackendHighMemory
+        expr: |
+          process_resident_memory_bytes{job=~"telegram-ai-agent.*"} > 1.5e9
+        for: 15m
+        labels:
+          severity: ticket
+          service: backend
+        annotations:
+          summary: "Backend RSS > 1.5GB for 15m"
+          description: |
+            Process memory usage is high. Look for leaks or unbounded
+            caches. Consider rolling restart if no fix is available.
+
+  - name: telegram-ai-agent.business
+    interval: 60s
+    rules:
+      - alert: NoPaymentEventsForOneHour
+        expr: |
+          sum(increase(tgai_business_payment_events_total{event="completed"}[1h])) == 0
+          and on() hour() >= 6 < 22
+        for: 30m
+        labels:
+          severity: ticket
+          service: payments
+        annotations:
+          summary: "No completed payments for over 1h during business hours"
+          description: |
+            No payment completion events were recorded for the last hour
+            during business hours (06:00-22:00 UTC). Verify Telegram Stars
+            webhook, the payments worker, and any new pricing rollouts.
+
+      - alert: ActiveUsersDropped
+        expr: |
+          sum(tgai_business_active_users) < (avg_over_time(sum(tgai_business_active_users)[1d:5m]) * 0.5)
+        for: 30m
+        labels:
+          severity: ticket
+          service: backend
+        annotations:
+          summary: "Active users dropped below 50% of 24h average"
+          description: |
+            Sliding-window active users dropped below half of the 24h
+            average for 30 minutes. Possible outage of the mini-app, bot,
+            or Telegram delivery.

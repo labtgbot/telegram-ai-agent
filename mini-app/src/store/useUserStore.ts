@@ -11,6 +11,10 @@ export interface User {
   referral_code: string;
   is_premium: boolean;
   is_banned: boolean;
+  photo_url?: string | null;
+  premium_expires_at?: string | null;
+  created_at?: string | null;
+  totp_enabled?: boolean;
 }
 
 interface UserState {

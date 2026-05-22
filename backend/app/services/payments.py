@@ -63,13 +63,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.client import TelegramApiError, TelegramClient
 from app.core.logging import get_logger
+from app.core.metrics import observe_payment_event, observe_purchase
 from app.models.subscription import Subscription
 from app.models.transaction import Transaction
 from app.models.user import User
+from app.services.balance_cache import get_default_balance_cache
 from app.services.payment_packages import (
     PRO_SUBSCRIPTION_DAYS,
     PaymentPackage,
     get_package,
+)
+from app.services.pricing import (
+    apply_pricing_to_package,
+    load_pricing_config,
 )
 from app.services.token_service import TokenService, UserNotFoundError
 
@@ -77,6 +83,9 @@ logger = get_logger(__name__)
 
 INVOICE_PREFIX = "invoice:"
 CHARGE_PREFIX = "tg:"
+REFERRAL_BONUS_PREFIX = "referral:"
+REFERRAL_BONUS_PACKAGE = "referral_bonus"
+DEFAULT_REFERRAL_BONUS_TOKENS = 100
 DEFAULT_CURRENCY = "XTR"
 PAYMENT_METHOD = "telegram_stars"
 
@@ -233,9 +242,15 @@ class PaymentService:
         the pre-checkout and successful-payment webhooks can correlate the
         purchase back to the user.
         """
-        package = get_package(package_code)
-        if package is None:
+        base_package = get_package(package_code)
+        if base_package is None:
             raise PackageNotFoundError(f"unknown package: {package_code!r}")
+
+        # Apply admin overrides → the pending row stores the *effective*
+        # price the user agreed to, so a later admin tweak does not
+        # invalidate an in-flight invoice.
+        pricing_config = await load_pricing_config(self.session)
+        package = apply_pricing_to_package(base_package, pricing_config)
 
         user = await self._get_user(user_id)
         payload = _generate_payload(package.code, user.id)
@@ -282,6 +297,7 @@ class PaymentService:
             transaction_id=pending.id,
             stars=package.stars,
         )
+        observe_payment_event(event="invoice_created", package=package.code)
         return InvoiceCreation(
             invoice_id=payload,
             payload=payload,
@@ -320,13 +336,23 @@ class PaymentService:
             raise PackageNotFoundError(
                 f"pre_checkout: unknown package in payload {payload!r}"
             )
-        if int(total_amount) != int(package.stars):
-            raise InvoicePayloadInvalidError(
-                f"pre_checkout: stars mismatch "
-                f"(payload={package.stars}, telegram={total_amount})"
-            )
 
         pending = await self._find_pending_invoice(payload)
+        # Validate against the price the user actually agreed to:
+        # the pending invoice holds the effective (admin-overridden) price.
+        # Subscription renewals have no pending row → fall back to the
+        # locked static price, which is exactly what Telegram bills.
+        expected_stars = (
+            int(pending.stars_amount or 0)
+            if pending is not None and pending.stars_amount is not None
+            else int(package.stars)
+        )
+        if int(total_amount) != expected_stars:
+            raise InvoicePayloadInvalidError(
+                f"pre_checkout: stars mismatch "
+                f"(expected={expected_stars}, telegram={total_amount})"
+            )
+
         if pending is None and not package.is_subscription:
             # Subscriptions can renew without a pending invoice (Telegram
             # bills automatically) — those flow straight to the success
@@ -368,6 +394,9 @@ class PaymentService:
                 charge_id=telegram_payment_charge_id,
                 transaction_id=existing.id,
             )
+            observe_payment_event(
+                event="duplicate", package=existing.package_name
+            )
             return PaymentResult(
                 transaction_id=int(existing.id),
                 user_id=int(user.id),
@@ -385,27 +414,39 @@ class PaymentService:
             raise PackageNotFoundError(
                 f"successful_payment: unknown package in payload {payload!r}"
             )
-        if int(total_amount) != int(package.stars):
-            raise InvoicePayloadInvalidError(
-                f"successful_payment: stars mismatch "
-                f"(payload={package.stars}, telegram={total_amount})"
-            )
 
         try:
             user_id = int(parts["u"])
         except (KeyError, ValueError) as exc:
             raise InvoicePayloadInvalidError("payload user id invalid") from exc
 
-        token_service = TokenService(self.session)
+        token_service = TokenService(self.session, get_default_balance_cache())
         charge_marker = f"{CHARGE_PREFIX}{telegram_payment_charge_id}"
 
         pending = await self._find_pending_invoice(payload)
+        # Validate the inbound amount against the pending row (which
+        # captured the admin-overridden price at invoice time), or the
+        # static package price for subscription renewals.
+        expected_stars = (
+            int(pending.stars_amount or 0)
+            if pending is not None and pending.stars_amount is not None
+            else int(package.stars)
+        )
+        if int(total_amount) != expected_stars:
+            raise InvoicePayloadInvalidError(
+                f"successful_payment: stars mismatch "
+                f"(expected={expected_stars}, telegram={total_amount})"
+            )
+
         if pending is not None and not is_recurring:
-            # Upgrade the existing pending row in place.
+            # Upgrade the existing pending row in place — credit the
+            # tokens that were actually quoted in the invoice, not the
+            # current static catalogue value.
+            effective_tokens = int(pending.tokens_amount or package.tokens)
             user = await token_service._lock_user(pending.user_id)
-            user.token_balance = int(user.token_balance or 0) + package.tokens
+            user.token_balance = int(user.token_balance or 0) + effective_tokens
             user.total_tokens_purchased = (
-                int(user.total_tokens_purchased or 0) + package.tokens
+                int(user.total_tokens_purchased or 0) + effective_tokens
             )
             pending.payment_id = charge_marker
             pending.payment_status = "completed"
@@ -454,6 +495,11 @@ class PaymentService:
             tx = await self._fetch_transaction(result.transaction_id)
             user = await self._get_user(user_id)
 
+        await self._maybe_credit_referral_bonus(
+            referee=user,
+            purchase_transaction_id=int(tx.id),
+        )
+
         subscription_id: int | None = None
         expires_at: datetime | None = None
         if package.is_subscription:
@@ -473,21 +519,34 @@ class PaymentService:
                 user.premium_expires_at = expires_at
             await self.session.flush()
 
+        tokens_credited = int(tx.tokens_amount or package.tokens)
+        stars_amount = int(tx.stars_amount or package.stars)
+        usd_amount_value = float(tx.usd_amount) if tx.usd_amount is not None else None
         logger.info(
             "payment.completed",
             user_id=user.id,
             charge_id=telegram_payment_charge_id,
             package=package.code,
-            stars=package.stars,
-            tokens=package.tokens,
+            stars=stars_amount,
+            tokens=tokens_credited,
             transaction_id=int(tx.id),
             recurring=is_recurring,
+        )
+        observe_purchase(
+            package=package.code,
+            tokens=tokens_credited,
+            stars=stars_amount,
+            usd=usd_amount_value,
+        )
+        observe_payment_event(
+            event="renewal" if is_recurring else "completed",
+            package=package.code,
         )
         return PaymentResult(
             transaction_id=int(tx.id),
             user_id=int(user.id),
-            tokens_credited=int(package.tokens),
-            stars_amount=int(package.stars),
+            tokens_credited=tokens_credited,
+            stars_amount=stars_amount,
             package_code=package.code,
             new_balance=int(user.token_balance or 0),
             is_subscription=package.is_subscription,
@@ -559,6 +618,111 @@ class PaymentService:
         if user is None:
             raise UserNotFoundError(f"user {user_id} not found")
         return user
+
+    async def _maybe_credit_referral_bonus(
+        self,
+        *,
+        referee: User,
+        purchase_transaction_id: int,
+    ) -> None:
+        """Credit the inviter when ``referee`` completes their first purchase.
+
+        Skipped when:
+
+        * the user has no inviter (``referred_by`` is null);
+        * the user already has another completed ``purchase`` transaction
+          (this is not the first purchase);
+        * a ``referral_bonus`` row already exists for this referee (a
+          previous call already credited the inviter — idempotency).
+        """
+        if not referee.referred_by:
+            return
+
+        marker = f"{REFERRAL_BONUS_PREFIX}{referee.id}"
+        existing_bonus = await self.session.execute(
+            select(Transaction.id).where(Transaction.payment_id == marker)
+        )
+        if existing_bonus.scalar_one_or_none() is not None:
+            return
+
+        # Detect "first purchase" — count completed purchases other than the
+        # one we just upgraded.  If this user has a prior completed purchase
+        # the referrer was already paid (or should have been).
+        prior_stmt = (
+            select(Transaction.id)
+            .where(
+                Transaction.user_id == referee.id,
+                Transaction.transaction_type == "purchase",
+                Transaction.payment_status == "completed",
+                Transaction.id != purchase_transaction_id,
+            )
+            .limit(1)
+        )
+        if (await self.session.execute(prior_stmt)).scalar_one_or_none() is not None:
+            return
+
+        bonus = self._referral_bonus_amount()
+        if bonus <= 0:
+            return
+
+        referrer = await self._fetch_referrer(int(referee.referred_by))
+        if referrer is None or referrer.is_banned:
+            return
+
+        token_service = TokenService(self.session, get_default_balance_cache())
+        # Wrap the credit in a SAVEPOINT so a race on the partial unique
+        # index over ``payment_id`` rolls back only the duplicate insert —
+        # not the surrounding payment transaction.
+        savepoint = await self.session.begin_nested()
+        try:
+            credit = await token_service.add(
+                user_id=int(referrer.id),
+                amount=bonus,
+                transaction_type="bonus",
+                package_name=REFERRAL_BONUS_PACKAGE,
+                payment_id=marker,
+                payment_status="completed",
+                meta={
+                    "referee_user_id": int(referee.id),
+                    "purchase_transaction_id": purchase_transaction_id,
+                },
+            )
+        except IntegrityError:
+            await savepoint.rollback()
+            return
+        except UserNotFoundError:
+            await savepoint.rollback()
+            return
+        else:
+            await savepoint.commit()
+
+        logger.info(
+            "payment.referral_bonus_credited",
+            referrer_id=int(referrer.id),
+            referee_id=int(referee.id),
+            tokens=bonus,
+            transaction_id=credit.transaction_id,
+            purchase_transaction_id=purchase_transaction_id,
+        )
+
+    def _referral_bonus_amount(self) -> int:
+        """Read the configured referral bonus, defaulting to 100."""
+        try:
+            from app.core.config import get_settings
+
+            return int(
+                getattr(
+                    get_settings(),
+                    "telegram_referral_bonus_tokens",
+                    DEFAULT_REFERRAL_BONUS_TOKENS,
+                )
+            )
+        except Exception:  # noqa: BLE001 — fall back to the constant
+            return DEFAULT_REFERRAL_BONUS_TOKENS
+
+    async def _fetch_referrer(self, user_id: int) -> User | None:
+        stmt = select(User).where(User.id == user_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def _find_pending_invoice(self, payload: str) -> Transaction | None:
         stmt = (
@@ -681,7 +845,7 @@ async def process_subscription_renewals(
         stmt = stmt.limit(int(limit))
     subs = list((await session.execute(stmt)).scalars().all())
 
-    token_service = TokenService(session)
+    token_service = TokenService(session, get_default_balance_cache())
     results: list[PaymentResult] = []
     for sub in subs:
         package = _package_for_plan(sub.plan_code)
@@ -752,6 +916,12 @@ async def process_subscription_renewals(
             transaction_id=credit.transaction_id,
             new_expires_at=sub.expires_at.isoformat(),
         )
+        observe_purchase(
+            package=package.code,
+            tokens=int(package.tokens),
+            stars=int(package.stars),
+        )
+        observe_payment_event(event="renewal", package=package.code)
         results.append(
             PaymentResult(
                 transaction_id=int(credit.transaction_id),

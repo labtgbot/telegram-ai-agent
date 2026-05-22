@@ -1,0 +1,61 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: tgai-backup-prune
+  namespace: tgai-backup
+  labels:
+    app.kubernetes.io/part-of: telegram-ai-agent
+    app.kubernetes.io/component: backup
+    backup.tgai/job: prune
+spec:
+  schedule: "0 4 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 3600
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          serviceAccountName: telegram-ai-agent-backup
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            fsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: prune
+              image: ghcr.io/labtgbot/telegram-ai-agent/backup:latest
+              imagePullPolicy: IfNotPresent
+              command: ["/opt/tgai/backup/prune-backups.sh"]
+              envFrom:
+                - configMapRef:
+                    name: telegram-ai-agent-backup-config
+                - secretRef:
+                    name: telegram-ai-agent-backup
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  cpu: 250m
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                - name: aws-cache
+                  mountPath: /home/nobody/.aws/cli
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            - name: aws-cache
+              emptyDir: {}

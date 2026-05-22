@@ -17,7 +17,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# `apt-get upgrade` pulls the latest Debian security updates published
+# after the upstream `python:slim` tag was built — without it the image
+# ships HIGH-severity CVEs in libsystemd0/libcap2/libc6 that Debian has
+# already patched (see audit-report.md § F-008).
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
         build-essential \
         curl \
@@ -32,7 +37,7 @@ FROM base AS dev
 COPY backend/pyproject.toml /app/backend/pyproject.toml
 COPY backend/README.md /app/backend/README.md
 
-RUN pip install --upgrade pip \
+RUN pip install --upgrade "pip" "setuptools>=78.1.1" "wheel>=0.46.2" \
     && pip install -e "/app/backend[dev]"
 
 COPY backend /app/backend
@@ -50,7 +55,10 @@ FROM base AS prod
 COPY backend/pyproject.toml /app/backend/pyproject.toml
 COPY backend/README.md /app/backend/README.md
 
-RUN pip install --upgrade pip \
+# Upgrade pip/setuptools/wheel before installing the app so the runtime
+# image does not ship the vendored CVEs in `wheel<0.46.2` and
+# `setuptools._vendor.jaraco.context<6.1.0` (audit-report.md § F-008).
+RUN pip install --upgrade "pip" "setuptools>=78.1.1" "wheel>=0.46.2" \
     && pip install "/app/backend"
 
 COPY backend /app/backend

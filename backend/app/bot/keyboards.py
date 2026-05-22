@@ -14,7 +14,10 @@ def main_menu(*, mini_app_url: str | None = None) -> dict[str, Any]:
         {"text": "🛒 Buy tokens", "callback_data": "menu:buy"},
         {"text": "👤 Profile", "callback_data": "menu:profile"},
     ]
-    rows: list[list[dict[str, Any]]] = [row1, row2]
+    row3: list[dict[str, Any]] = [
+        {"text": "🎁 Daily bonus", "callback_data": "menu:bonus"},
+    ]
+    rows: list[list[dict[str, Any]]] = [row1, row2, row3]
     if mini_app_url:
         rows.append([{"text": "🚀 Open Mini App", "web_app": {"url": mini_app_url}}])
     return {"inline_keyboard": rows}

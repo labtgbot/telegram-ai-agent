@@ -1,0 +1,331 @@
+# Default values for the telegram-ai-agent chart.
+#
+# Values are split per-component so each service can be tuned (image, replicas,
+# probes, HPA, resources) independently. Environment overlays live in
+# values-staging.yaml and values-production.yaml.
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Common labels applied to all generated resources.
+commonLabels: {}
+
+# -- Common annotations applied to all generated resources.
+commonAnnotations: {}
+
+image:
+  # Container registry that hosts the per-component images. The chart appends
+  # /<component> to form the final repository (e.g. ghcr.io/labtgbot/telegram-ai-agent/backend).
+  registry: ghcr.io/labtgbot/telegram-ai-agent
+  pullPolicy: IfNotPresent
+  # Default tag applied to every component when its own image.tag is empty.
+  # Release pipelines should override this with the released semver (e.g. "0.1.0").
+  tag: ""
+  # Optional list of ImagePullSecret names (e.g. ghcr-pull). Defaults to empty:
+  # public GHCR images do not need credentials.
+  pullSecrets: []
+
+# -- Cluster ingress class (nginx-ingress by default).
+ingressClassName: nginx
+
+# -- cert-manager ClusterIssuer used by the chart's Ingress.
+clusterIssuer: letsencrypt-prod
+
+# Shared environment variables injected into every backend pod (api + bot +
+# workers). Values are read from the SealedSecret/ExternalSecret rendered
+# separately under deploy/k8s/secrets.
+secret:
+  # Name of the Kubernetes Secret holding sensitive backend env vars.
+  name: telegram-ai-agent-backend
+  # When `create: true`, the chart renders a placeholder Secret with the keys
+  # listed in `defaults`. Real environments leave this `false` and provision
+  # the Secret via sealed-secrets / external-secrets instead.
+  create: false
+  defaults:
+    TELEGRAM_BOT_TOKEN: ""
+    TELEGRAM_WEBHOOK_SECRET: ""
+    APP_SECRET: ""
+    ADMIN_JWT_SECRET: ""
+    DATABASE_URL: ""
+    REDIS_URL: ""
+    COMPOSIO_API_KEY: ""
+    GEMINI_API_KEY: ""
+    ANTHROPIC_API_KEY: ""
+    OPENAI_API_KEY: ""
+    PAYMENT_PROVIDER_TOKEN: ""
+
+# Non-secret environment vars injected into the backend pods.
+config:
+  APP_ENV: production
+  APP_DEBUG: "false"
+  LOG_LEVEL: INFO
+  LOG_FORMAT: json
+  API_V1_PREFIX: /api/v1
+  HEALTH_CHECK_TIMEOUT: "2.0"
+  TELEGRAM_API_BASE_URL: https://api.telegram.org
+  TELEGRAM_SET_COMMANDS_ON_STARTUP: "true"
+  COMPOSIO_BASE_URL: https://backend.composio.dev
+  PAYMENT_CURRENCY: XTR
+
+# -----------------------------------------------------------------------------
+# Backend API (FastAPI: REST + bot webhook)
+# -----------------------------------------------------------------------------
+backend:
+  enabled: true
+  image:
+    repository: backend
+    tag: ""
+  replicaCount: 2
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: /metrics
+  serviceAccount:
+    create: true
+    name: ""
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  probes:
+    liveness:
+      path: /api/v1/health/live
+      initialDelaySeconds: 15
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+    readiness:
+      path: /api/v1/health
+      initialDelaySeconds: 10
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 6
+    startup:
+      path: /api/v1/health/live
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 30
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  # Use Argo Rollouts instead of a vanilla Deployment when `rollout.enabled`.
+  rollout:
+    enabled: false
+    strategy: canary
+    canary:
+      steps:
+        - setWeight: 20
+        - pause: { duration: 60 }
+        - setWeight: 50
+        - pause: { duration: 120 }
+        - setWeight: 100
+  extraEnv: []
+
+# -----------------------------------------------------------------------------
+# Celery worker (optional; off until image is built — Phase 4 follow-up).
+# -----------------------------------------------------------------------------
+worker:
+  enabled: false
+  image:
+    repository: backend
+    tag: ""
+  replicaCount: 1
+  command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=INFO"]
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+
+# -----------------------------------------------------------------------------
+# Mini App (React static bundle served by nginx).
+# -----------------------------------------------------------------------------
+miniApp:
+  enabled: true
+  image:
+    repository: mini-app
+    tag: ""
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  autoscaling:
+    enabled: false
+
+# -----------------------------------------------------------------------------
+# Admin dashboard (Next.js).
+# -----------------------------------------------------------------------------
+admin:
+  enabled: true
+  image:
+    repository: admin
+    tag: ""
+  replicaCount: 2
+  service:
+    type: ClusterIP
+    port: 3001
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+  autoscaling:
+    enabled: false
+
+# -----------------------------------------------------------------------------
+# Ingress (nginx-ingress + cert-manager).
+# -----------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: ""  # falls back to .Values.ingressClassName
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+  hosts:
+    - host: bot.example.com
+      paths:
+        - path: /api/
+          pathType: Prefix
+          service: backend
+        - path: /
+          pathType: Prefix
+          service: miniApp
+    - host: admin.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: admin
+  tls:
+    enabled: true
+    # Leave secretName empty to let cert-manager generate the Secret using
+    # the host as suffix. Set explicitly when reusing an existing certificate.
+    secretName: ""
+
+# -----------------------------------------------------------------------------
+# Backup & Disaster Recovery.
+#
+# Off by default so the chart still installs cleanly on dev clusters that do
+# not have S3 credentials wired up. Enable per-environment (see
+# values-production.yaml). Refer to docs/BACKUP_RECOVERY.md for the full DR
+# runbook, RPO/RTO targets, and quarterly restore drill procedure.
+# -----------------------------------------------------------------------------
+backup:
+  enabled: false
+
+  image:
+    repository: backup
+    tag: ""        # falls back to .Values.image.tag, then Chart.AppVersion
+
+  # Shared S3 configuration. KMS encryption is enforced when kmsKeyId is set;
+  # SSE-S3 (AES256) is used otherwise. Plaintext uploads are never produced.
+  s3:
+    bucket: ""           # required when backup.enabled
+    region: ""           # e.g. eu-central-1
+    endpoint: ""         # optional — non-AWS S3 (MinIO, R2, etc.)
+    kmsKeyId: ""         # KMS key ARN/alias for SSE-KMS
+
+  # 30-day retention satisfies the Phase 4 acceptance criterion. WAL retention
+  # is tighter — the point-in-time recovery window we advertise is 7 days.
+  retentionDays: 30
+  walRetentionDays: 7
+
+  # Source database/redis coordinates. Defaults pick the in-cluster service
+  # names; override when targeting managed Postgres / managed Redis.
+  postgres:
+    enabled: true
+    host: postgres
+    port: 5432
+    database: telegram_ai_agent
+    user: postgres
+    # Schedule defaults: 02:00 UTC daily.
+    schedule: "0 2 * * *"
+    # WAL push is driven by the Postgres server's archive_command (managed
+    # service or the script in deploy/backup/scripts/postgres-wal-archive.sh
+    # bundled into a custom Postgres image). The chart only generates the
+    # daily logical dump CronJob; document the WAL flow but don't auto-create
+    # an archive sidecar (architecture varies too much per provider).
+    extraArgs: ""
+
+  redis:
+    enabled: true
+    host: redis
+    port: 6379
+    # Daily at 02:30 UTC — staggered to avoid Postgres burst.
+    schedule: "30 2 * * *"
+
+  media:
+    enabled: false
+    sourceBucket: ""      # set MEDIA_S3_BUCKET equivalent
+    sourcePrefix: ""
+    schedule: "0 3 * * *"
+    mirrorDeletes: false
+
+  prune:
+    enabled: true
+    schedule: "0 4 * * *"
+
+  # Quarterly restore drill. Default cron fires at 06:00 UTC on the 1st of
+  # Jan/Apr/Jul/Oct — adjust to your team's quarterly review cadence.
+  verify:
+    enabled: true
+    schedule: "0 6 1 1,4,7,10 *"
+    smokeTables: "users"
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+  # Secret holding sensitive backup env vars: AWS credentials (when not using
+  # IRSA / workload identity), POSTGRES_PASSWORD, REDIS_PASSWORD, optional
+  # BACKUP_NOTIFY_WEBHOOK. Create out-of-band via sealed-secrets /
+  # external-secrets — the chart only references it by name.
+  secret:
+    name: telegram-ai-agent-backup
+    create: false
+    defaults:
+      AWS_ACCESS_KEY_ID: ""
+      AWS_SECRET_ACCESS_KEY: ""
+      PGPASSWORD: ""
+      REDIS_PASSWORD: ""
+      BACKUP_NOTIFY_WEBHOOK: ""
+
+  # Optional ServiceAccount with IRSA / workload-identity annotations for
+  # clusters that prefer not to mount static AWS creds.
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}

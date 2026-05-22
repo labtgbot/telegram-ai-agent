@@ -200,6 +200,81 @@ async def test_dispatch_catches_handler_exception_and_replies(
 
 
 @pytest.mark.asyncio
+async def test_dispatch_privacy_replies_with_link(
+    settings, session_stub, client_stub
+) -> None:
+    """`/privacy` must include a link to the Privacy Policy when the origin is known."""
+    settings.telegram_mini_app_url = "https://app.example.com/app"
+    update = {
+        "update_id": 10,
+        "message": {
+            "chat": {"id": 77},
+            "from": {"id": 7},
+            "text": "/privacy",
+        },
+    }
+    await dispatch_update(
+        update,
+        settings=settings,
+        client=client_stub,
+        session=session_stub,
+    )
+    args, _ = client_stub.send_message.await_args
+    assert args[0] == 77
+    assert "https://app.example.com/privacy" in args[1]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_terms_replies_with_link(
+    settings, session_stub, client_stub
+) -> None:
+    """`/terms` must include a link to the Terms of Service when the origin is known."""
+    settings.telegram_mini_app_url = "https://app.example.com/app"
+    update = {
+        "update_id": 11,
+        "message": {
+            "chat": {"id": 78},
+            "from": {"id": 7},
+            "text": "/terms",
+        },
+    }
+    await dispatch_update(
+        update,
+        settings=settings,
+        client=client_stub,
+        session=session_stub,
+    )
+    args, _ = client_stub.send_message.await_args
+    assert args[0] == 78
+    assert "https://app.example.com/terms" in args[1]
+
+
+@pytest.mark.asyncio
+async def test_dispatch_privacy_without_mini_app_url_falls_back(
+    settings, session_stub, client_stub
+) -> None:
+    """Without a configured Mini App URL the handler must still reply, not crash."""
+    settings.telegram_mini_app_url = ""
+    update = {
+        "update_id": 12,
+        "message": {
+            "chat": {"id": 79},
+            "from": {"id": 7},
+            "text": "/privacy",
+        },
+    }
+    await dispatch_update(
+        update,
+        settings=settings,
+        client=client_stub,
+        session=session_stub,
+    )
+    args, _ = client_stub.send_message.await_args
+    assert args[0] == 79
+    assert "Privacy Policy" in args[1]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_callback_query_acks_and_dispatches(
     settings, session_stub, client_stub, monkeypatch
 ) -> None:
