@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/Button";
@@ -25,7 +26,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   confirming = false,
-}: ConfirmDialogProps): JSX.Element | null {
+}: ConfirmDialogProps): ReactElement | null {
   const [typed, setTyped] = useState("");
 
   useEffect(() => {

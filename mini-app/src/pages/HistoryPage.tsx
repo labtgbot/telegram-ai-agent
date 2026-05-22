@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/Button";
@@ -46,7 +47,7 @@ function statusKey(status: string | null): TranslationKey | null {
   return null;
 }
 
-export function HistoryPage(): JSX.Element {
+export function HistoryPage(): ReactElement {
   const { t, language } = useTranslation();
   const [filter, setFilter] = useState<FilterValue>("all");
   const [page, setPage] = useState(1);
@@ -166,7 +167,7 @@ interface HistoryRowProps {
   language: string;
 }
 
-function HistoryRow({ item, language }: HistoryRowProps): JSX.Element {
+function HistoryRow({ item, language }: HistoryRowProps): ReactElement {
   const { t } = useTranslation();
   const service = normalizeServiceType(item.service_type);
   const statusTk = statusKey(item.response_status);

@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Button } from "@/components/Button";
@@ -32,7 +33,7 @@ function shareViaTelegram(link: string): boolean {
   }
 }
 
-export function ReferralLink({ data, isLoading, error }: ReferralLinkProps): JSX.Element {
+export function ReferralLink({ data, isLoading, error }: ReferralLinkProps): ReactElement {
   const [copied, setCopied] = useState(false);
 
   if (error) {

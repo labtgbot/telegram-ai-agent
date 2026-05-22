@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { BalanceCard } from "@/components/billing/BalanceCard";
@@ -13,7 +14,7 @@ import { useTransactions } from "@/hooks/useTransactions";
 import { useUserStore } from "@/store/useUserStore";
 import type { TransactionType } from "@/types/billing";
 
-export function BalancePage(): JSX.Element {
+export function BalancePage(): ReactElement {
   const balance = useBalance();
   const packages = usePackages();
   const referral = useReferral();
@@ -38,9 +39,7 @@ export function BalancePage(): JSX.Element {
     buyPackage.mutate(code, {
       onSuccess: (result) => {
         if (result.payment.status === "completed") {
-          setPurchaseNotice(
-            `Готово! Начислено ${result.payment.tokens_credited} токенов.`,
-          );
+          setPurchaseNotice(`Готово! Начислено ${result.payment.tokens_credited} токенов.`);
         } else if (result.telegramStatus === "cancelled") {
           setPurchaseNotice("Покупка отменена.");
         } else if (result.payment.status === "failed") {
@@ -62,7 +61,7 @@ export function BalancePage(): JSX.Element {
     setPage(1);
   };
 
-  const buyingCode = buyPackage.isPending ? buyPackage.variables ?? null : null;
+  const buyingCode = buyPackage.isPending ? (buyPackage.variables ?? null) : null;
 
   return (
     <div className="flex flex-col gap-4">

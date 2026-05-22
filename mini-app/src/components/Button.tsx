@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ReactElement, ButtonHTMLAttributes, ReactNode } from "react";
 
 type Variant = "primary" | "secondary" | "ghost" | "destructive";
 
@@ -19,7 +19,7 @@ export function Button({
   className = "",
   children,
   ...rest
-}: ButtonProps): JSX.Element {
+}: ButtonProps): ReactElement {
   const variantClass = VARIANT_CLASSES[variant];
   return (
     <button

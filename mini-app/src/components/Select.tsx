@@ -1,4 +1,4 @@
-import type { ChangeEvent } from "react";
+import type { ReactElement, ChangeEvent } from "react";
 
 export interface SelectOption<T extends string> {
   value: T;
@@ -23,7 +23,7 @@ export function Select<T extends string>({
   description,
   id,
   disabled = false,
-}: SelectProps<T>): JSX.Element {
+}: SelectProps<T>): ReactElement {
   const selectId = id ?? `select-${label.replace(/\s+/g, "-").toLowerCase()}`;
   const handleChange = (event: ChangeEvent<HTMLSelectElement>): void => {
     onChange(event.target.value as T);

@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import type { TransactionItem, TransactionType, TransactionsResponse } from "@/types/billing";
@@ -67,7 +68,7 @@ export function TransactionList({
   filter,
   onPageChange,
   onFilterChange,
-}: TransactionListProps): JSX.Element {
+}: TransactionListProps): ReactElement {
   return (
     <Card title="История операций">
       <div className="mb-3 flex flex-wrap gap-2" data-testid="transactions-filter">
@@ -137,7 +138,11 @@ export function TransactionList({
 
       <div className="mt-3 flex items-center justify-between text-xs text-tg-hint">
         <span data-testid="transactions-meta">
-          {isLoading ? "Обновляем…" : data ? `Стр. ${page} из ${Math.max(1, Math.ceil(data.total / data.limit))}` : ""}
+          {isLoading
+            ? "Обновляем…"
+            : data
+              ? `Стр. ${page} из ${Math.max(1, Math.ceil(data.total / data.limit))}`
+              : ""}
         </span>
         <div className="flex gap-2">
           <Button

@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useTranslation } from "@/i18n/useTranslation";
 import { useConsentStore, consentNeedsDecision } from "@/store/useConsentStore";
 
@@ -10,7 +11,7 @@ import { useConsentStore, consentNeedsDecision } from "@/store/useConsentStore";
  * which `partialize`s to a single key in `localStorage` so the decision
  * survives reloads.
  */
-export function ConsentBanner(): JSX.Element | null {
+export function ConsentBanner(): ReactElement | null {
   const { t } = useTranslation();
   const record = useConsentStore((s) => s.record);
   const setDecision = useConsentStore((s) => s.setDecision);

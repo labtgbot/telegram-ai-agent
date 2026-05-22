@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/Button";
@@ -15,7 +16,7 @@ function formatTimeUtc(iso: string): string {
   return `${hh}:${mm}`;
 }
 
-export function DailyBonusCard(): JSX.Element {
+export function DailyBonusCard(): ReactElement {
   const { t } = useTranslation();
   const setBalance = useUserStore((s) => s.setBalance);
   const [status, setStatus] = useState<DailyBonusStatus | null>(null);
@@ -158,11 +159,7 @@ export function DailyBonusCard(): JSX.Element {
 
       <div className="mt-3">
         {status.available ? (
-          <Button
-            data-testid="daily-bonus-claim"
-            onClick={() => void claim()}
-            disabled={claiming}
-          >
+          <Button data-testid="daily-bonus-claim" onClick={() => void claim()} disabled={claiming}>
             {claiming
               ? t("dailyBonus.claiming")
               : t("dailyBonus.claim", { amount: status.next_amount })}

@@ -1,9 +1,5 @@
-import {
-  MODE_COST,
-  MODE_DESCRIPTION,
-  MODE_LABEL,
-  type AgentMode,
-} from "@/types/chat";
+import type { ReactElement } from "react";
+import { MODE_COST, MODE_DESCRIPTION, MODE_LABEL, type AgentMode } from "@/types/chat";
 
 const MODES: AgentMode[] = ["basic", "advanced", "autonomous_agent"];
 
@@ -13,7 +9,7 @@ interface ModeSwitcherProps {
   disabled?: boolean;
 }
 
-export function ModeSwitcher({ value, onChange, disabled }: ModeSwitcherProps): JSX.Element {
+export function ModeSwitcher({ value, onChange, disabled }: ModeSwitcherProps): ReactElement {
   return (
     <div
       role="radiogroup"

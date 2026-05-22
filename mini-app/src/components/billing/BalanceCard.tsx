@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { AnimatedNumber } from "@/components/billing/AnimatedNumber";
 import { Card } from "@/components/Card";
 import type { Balance } from "@/types/billing";
@@ -21,7 +22,7 @@ function formatPremiumExpiry(value: string | null): string | null {
   return PREMIUM_FORMATTER.format(date);
 }
 
-export function BalanceCard({ balance, isLoading, error }: BalanceCardProps): JSX.Element {
+export function BalanceCard({ balance, isLoading, error }: BalanceCardProps): ReactElement {
   if (error) {
     return (
       <Card title="Баланс">

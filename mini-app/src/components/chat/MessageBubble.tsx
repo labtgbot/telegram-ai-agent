@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -8,7 +9,7 @@ interface MessageBubbleProps {
   message: ChatMessage;
 }
 
-export function MessageBubble({ message }: MessageBubbleProps): JSX.Element {
+export function MessageBubble({ message }: MessageBubbleProps): ReactElement {
   const isUser = message.role === "user";
   const align = isUser ? "items-end" : "items-start";
   const bubbleColor = isUser
@@ -53,7 +54,7 @@ interface MarkdownBodyProps {
   variant: "default" | "inverted";
 }
 
-function MarkdownBody({ content, variant }: MarkdownBodyProps): JSX.Element {
+function MarkdownBody({ content, variant }: MarkdownBodyProps): ReactElement {
   const codeBg = variant === "inverted" ? "bg-black/30" : "bg-tg-bg/60";
   const linkClass =
     variant === "inverted" ? "underline text-tg-button-text" : "underline text-tg-link";
@@ -77,10 +78,7 @@ function MarkdownBody({ content, variant }: MarkdownBodyProps): JSX.Element {
             const isInline = !className?.startsWith("language-");
             if (isInline) {
               return (
-                <code
-                  {...rest}
-                  className={`${codeBg} rounded px-1 py-0.5 font-mono text-[12px]`}
-                >
+                <code {...rest} className={`${codeBg} rounded px-1 py-0.5 font-mono text-[12px]`}>
                   {children}
                 </code>
               );
@@ -119,7 +117,7 @@ function MarkdownBody({ content, variant }: MarkdownBodyProps): JSX.Element {
   );
 }
 
-function TypingDots(): JSX.Element {
+function TypingDots(): ReactElement {
   return (
     <span aria-label="Assistant is typing" className="inline-flex gap-1 align-middle">
       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-tg-hint" />
@@ -129,7 +127,7 @@ function TypingDots(): JSX.Element {
   );
 }
 
-function AttachmentView({ attachment }: { attachment: ChatAttachment }): JSX.Element {
+function AttachmentView({ attachment }: { attachment: ChatAttachment }): ReactElement {
   switch (attachment.kind) {
     case "image":
       return (
@@ -151,12 +149,7 @@ function AttachmentView({ attachment }: { attachment: ChatAttachment }): JSX.Ele
       return (
         <figure className="mt-2">
           {attachment.url ? (
-            <video
-              src={attachment.url}
-              controls
-              playsInline
-              className="max-h-72 rounded-tg"
-            />
+            <video src={attachment.url} controls playsInline className="max-h-72 rounded-tg" />
           ) : null}
           {attachment.caption ? (
             <figcaption className="mt-1 text-xs text-tg-hint">{attachment.caption}</figcaption>
@@ -185,7 +178,7 @@ function AttachmentView({ attachment }: { attachment: ChatAttachment }): JSX.Ele
   }
 }
 
-function SearchResults({ attachment }: { attachment: ChatAttachment }): JSX.Element {
+function SearchResults({ attachment }: { attachment: ChatAttachment }): ReactElement {
   const results = Array.isArray(attachment.data)
     ? (attachment.data as Array<{ title: string; url: string; snippet?: string | null }>)
     : [];

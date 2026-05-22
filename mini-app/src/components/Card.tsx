@@ -1,11 +1,11 @@
-import type { HTMLAttributes, ReactNode } from "react";
+import type { ReactElement, HTMLAttributes, ReactNode } from "react";
 
 interface CardProps extends HTMLAttributes<HTMLDivElement> {
   title?: string;
   children: ReactNode;
 }
 
-export function Card({ title, children, className = "", ...rest }: CardProps): JSX.Element {
+export function Card({ title, children, className = "", ...rest }: CardProps): ReactElement {
   return (
     <section {...rest} className={`rounded-tg bg-tg-section-bg p-4 shadow-tg ${className}`.trim()}>
       {title ? (

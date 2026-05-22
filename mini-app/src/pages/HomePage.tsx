@@ -1,10 +1,11 @@
+import type { ReactElement } from "react";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { DailyBonusCard } from "@/components/DailyBonusCard";
 import { useTranslation } from "@/i18n/useTranslation";
 import { useUserStore } from "@/store/useUserStore";
 
-export function HomePage(): JSX.Element {
+export function HomePage(): ReactElement {
   const user = useUserStore((s) => s.user);
   const { t } = useTranslation();
   const greeting = user?.first_name ?? user?.username ?? "there";
