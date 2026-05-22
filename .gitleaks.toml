@@ -1,0 +1,56 @@
+# Gitleaks configuration for Telegram AI Agent.
+#
+# We inherit the upstream default ruleset and only narrow it with
+# allow-list entries below — fixtures, test data, and sentinel
+# placeholders that are clearly NOT real secrets.
+#
+# Docs: https://github.com/gitleaks/gitleaks#configuration
+
+title = "Telegram AI Agent gitleaks config"
+
+[extend]
+# Pull the maintained ruleset published by the gitleaks project.
+useDefault = true
+
+[allowlist]
+description = "Repository-wide allow-list (paths, regexes, commits)"
+
+paths = [
+    # Lockfiles: cargo / npm hashes look like high-entropy strings but are
+    # public integrity checksums.
+    '''(^|/)package-lock\.json$''',
+    '''(^|/)pnpm-lock\.yaml$''',
+    # Documentation: examples and pasted curl snippets routinely include
+    # placeholder bearer tokens. We rely on code review for these.
+    '''(^|/)docs/.*\.md$''',
+    '''(^|/).+\.md$''',
+    # Local-dev compose stack contains throw-away postgres/redis creds.
+    '''(^|/)docker/compose\.yml$''',
+    # Backend test fixtures: hard-coded tokens for HMAC unit tests.
+    '''(^|/)backend/tests/.*$''',
+    # Frontend test fixtures.
+    '''(^|/)mini-app/.*__fixtures__/.*$''',
+    '''(^|/)admin-dashboard/.*__fixtures__/.*$''',
+    # Mock Composio recordings.
+    '''(^|/)backend/app/services/composio/mocks/.*$''',
+]
+
+regexes = [
+    # Sentinel placeholders documented in audit-report.md F-001 — they
+    # exist as defaults that the bootstrap-check rejects.
+    '''change-me''',
+    '''CHANGEME''',
+    # Telegram bot-token shape used in CI smoke tests
+    # (see backend.yml::TELEGRAM_BOT_TOKEN).
+    '''1234567890:LOAD-SMOKE-[A-Z]{22}''',
+    # Placeholder issuer used by pyotp tests.
+    '''otpauth://totp/Test:.*''',
+]
+
+stopwords = [
+    "example",
+    "sample",
+    "placeholder",
+    "fixture",
+    "dummy",
+]

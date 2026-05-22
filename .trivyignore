@@ -1,0 +1,52 @@
+# Trivy ignore-list — entries here are scanned but do NOT fail CI.
+#
+# Every line MUST be either a comment (`#`) or a single vulnerability ID
+# (CVE-…, GHSA-…). Each accepted exception MUST be cross-referenced to a
+# finding in docs/security/audit-report.md so the residual risk has an
+# owner and a tracking issue. When a fix becomes available (Next.js
+# upgrade, Debian point release, etc.) the corresponding ID MUST be
+# removed from this file so the CI gate ratchets back up.
+#
+# Re-run the scanners locally before editing:
+#   trivy fs . --severity HIGH,CRITICAL --ignore-unfixed
+#   trivy image tgai-backend:security-scan --severity HIGH,CRITICAL --ignore-unfixed
+
+# ---------------------------------------------------------------------------
+# F-006 — admin-dashboard pinned to next@14.2.35 (Phase 4.x upgrade planned).
+# Mitigated by ingress IP-allowlist + CSP nonces. See audit-report.md § F-006.
+# ---------------------------------------------------------------------------
+CVE-2026-44573
+CVE-2026-44578
+CVE-2026-44576
+CVE-2026-44577
+CVE-2026-44580
+CVE-2026-44581
+CVE-2026-44572
+CVE-2026-44582
+CVE-2025-59471
+CVE-2026-27980
+CVE-2026-29057
+GHSA-8h8q-6873-q5fj
+GHSA-h25m-26qc-wcjf
+GHSA-q4gf-8mx6-v5v3
+
+# ---------------------------------------------------------------------------
+# F-007 — admin-dashboard JS toolchain (dev/build-only).
+#   * rollup@3.29.5 — transitive devDep of @sentry/nextjs; not shipped to
+#     end users. Removed once Next.js 15 upgrade lands (bumps rollup>=4.x).
+#   * postcss@8.4.31 — devDep used by Tailwind/Next build pipeline.
+# See audit-report.md § F-007.
+# ---------------------------------------------------------------------------
+CVE-2026-27606
+CVE-2026-41305
+
+# ---------------------------------------------------------------------------
+# F-008 — backend image base-layer CVEs that lag the upstream `python:slim`
+# rebuild cadence. `apt-get upgrade` in docker/Dockerfile.backend pulls
+# every Debian security fix at build time, so this list shrinks
+# automatically as Debian publishes patched packages. Entries below remain
+# only while the upstream Debian package has no fix yet.
+# See audit-report.md § F-008.
+# ---------------------------------------------------------------------------
+# (intentionally empty — populate when a future scan finds an unfixable
+# Debian CVE we explicitly accept)

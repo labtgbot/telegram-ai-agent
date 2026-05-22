@@ -51,9 +51,9 @@ export interface TransactionsResponse {
 
 export interface ReferralInfo {
   referral_code: string;
+  referrals_count: number;
+  bonus_tokens_earned: number;
   referral_link: string;
-  bot_username: string | null;
-  start_param: string;
 }
 
 export interface InvoiceCreation {

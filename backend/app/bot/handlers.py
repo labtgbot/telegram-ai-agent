@@ -22,6 +22,11 @@ from app.core.logging import get_logger
 from app.core.redis import get_redis
 from app.services.bot_users import register_or_update_user
 from app.services.composio import ComposioClient
+from app.services.daily_bonus import (
+    AlreadyClaimedError,
+    DailyBonusDisabledError,
+    DailyBonusService,
+)
 from app.services.image_generation import (
     QUALITY_COST,
     QUALITY_STANDARD,
@@ -744,6 +749,67 @@ async def handle_agent(ctx: HandlerContext) -> None:
     await _run_text_mode(ctx, mode=MODE_AGENT, label="AI agent")
 
 
+def _legal_base_url(settings: Settings) -> str | None:
+    """Return the public origin used to build ``/privacy`` and ``/terms`` links.
+
+    Falls back to the Mini App URL because the same FastAPI app serves both
+    routes (see ``app.main``). Returns ``None`` when the origin is unknown
+    so the handler can degrade gracefully to an inline snippet.
+    """
+    raw = (settings.telegram_mini_app_url or "").strip()
+    if not raw:
+        return None
+    # Strip path/query — the Mini App URL may point to ``/app`` but the
+    # legal docs are mounted at the origin root.
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(raw)
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+async def handle_privacy(ctx: HandlerContext) -> None:
+    """``/privacy`` — link to the public Privacy Policy."""
+    if ctx.chat_id is None:
+        return
+    origin = _legal_base_url(ctx.settings)
+    if origin:
+        text = (
+            "🔒 <b>Privacy Policy</b>\n"
+            f"Read it here: {origin}/privacy\n\n"
+            "It explains what data we collect, why we collect it, and how to "
+            "exercise your GDPR rights (export, deletion, correction)."
+        )
+    else:
+        text = (
+            "🔒 <b>Privacy Policy</b>\n"
+            "Open the Mini App for the full document, or contact support if "
+            "you can't access it."
+        )
+    await ctx.client.send_message(ctx.chat_id, text)
+
+
+async def handle_terms(ctx: HandlerContext) -> None:
+    """``/terms`` — link to the public Terms of Service."""
+    if ctx.chat_id is None:
+        return
+    origin = _legal_base_url(ctx.settings)
+    if origin:
+        text = (
+            "📜 <b>Terms of Service</b>\n"
+            f"Read them here: {origin}/terms\n\n"
+            "Using the bot or Mini App means you accept these terms."
+        )
+    else:
+        text = (
+            "📜 <b>Terms of Service</b>\n"
+            "Open the Mini App for the full document, or contact support if "
+            "you can't access it."
+        )
+    await ctx.client.send_message(ctx.chat_id, text)
+
+
 async def handle_profile(ctx: HandlerContext) -> None:
     if ctx.chat_id is None or ctx.from_user is None:
         return
@@ -791,6 +857,80 @@ async def handle_referral(ctx: HandlerContext) -> None:
     )
 
 
+def _format_bonus_amounts(amounts: tuple[int, ...] | list[int]) -> str:
+    if not amounts:
+        return "—"
+    return " → ".join(str(a) for a in amounts)
+
+
+async def handle_bonus(ctx: HandlerContext) -> None:
+    """``/bonus`` — claim today's daily bonus (idempotent per UTC day)."""
+    if ctx.chat_id is None or ctx.from_user is None:
+        return
+    user = await find_user_by_telegram_id(ctx.session, int(ctx.from_user["id"]))
+    if user is None:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "I don't recognise you yet — send /start to register.",
+        )
+        return
+
+    service = DailyBonusService(ctx.session, get_redis())
+    try:
+        result = await service.claim(user.id)
+    except AlreadyClaimedError as exc:
+        snapshot = await service.status(user.id)
+        next_amount = snapshot.next_amount
+        await ctx.client.send_message(
+            ctx.chat_id,
+            (
+                "🎁 <b>Daily bonus</b>\n"
+                "You've already claimed today's bonus. "
+                f"Come back after <b>{exc.next_available_at:%Y-%m-%d %H:%M} UTC</b> "
+                f"to keep the streak going (next reward: <b>{next_amount}</b> tokens).\n\n"
+                f"Streak ladder: {_format_bonus_amounts(snapshot.amounts)}"
+            ),
+        )
+        return
+    except DailyBonusDisabledError:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "🎁 The daily bonus is paused right now. Please try again later.",
+        )
+        return
+    except UserNotFoundError:
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "I don't recognise you yet — send /start to register.",
+        )
+        return
+
+    try:
+        await ctx.session.commit()
+    except Exception as exc:  # noqa: BLE001 — surface a friendly fallback
+        await ctx.session.rollback()
+        logger.exception("bot.daily_bonus.commit_failed", error=str(exc))
+        await ctx.client.send_message(
+            ctx.chat_id,
+            "Something went wrong while crediting your bonus — please try again.",
+        )
+        return
+
+    await ctx.client.send_message(
+        ctx.chat_id,
+        (
+            "🎁 <b>Daily bonus claimed!</b>\n"
+            f"+<b>{result.amount}</b> tokens · streak day <b>{result.streak_day}</b>\n"
+            f"Balance: <b>{result.new_balance}</b>\n\n"
+            f"Come back tomorrow after <b>{result.next_available_at:%H:%M} UTC</b> "
+            "to grow the streak."
+        ),
+        reply_markup=main_menu(
+            mini_app_url=ctx.settings.telegram_mini_app_url or None
+        ),
+    )
+
+
 # ----------------------------------------------------------------- callbacks
 
 
@@ -799,6 +939,7 @@ _CALLBACK_TO_COMMAND = {
     "menu:buy": handle_buy,
     "menu:profile": handle_profile,
     "menu:referral": handle_referral,
+    "menu:bonus": handle_bonus,
     "menu:chat": None,  # handled inline
 }
 
@@ -978,4 +1119,7 @@ COMMAND_HANDLERS = {
     "video": handle_video,
     "profile": handle_profile,
     "referral": handle_referral,
+    "bonus": handle_bonus,
+    "privacy": handle_privacy,
+    "terms": handle_terms,
 }

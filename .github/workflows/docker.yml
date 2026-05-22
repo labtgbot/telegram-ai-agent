@@ -8,10 +8,12 @@ on:
       - "backend/**"
       - "mini-app/**"
       - "admin-dashboard/**"
+      - "deploy/backup/**"
       - "docker/**"
       - ".github/workflows/docker.yml"
   pull_request:
     paths:
+      - "deploy/backup/**"
       - "docker/**"
       - ".github/workflows/docker.yml"
   workflow_dispatch:
@@ -47,8 +49,12 @@ jobs:
             dockerfile: docker/Dockerfile.admin
             context: admin-dashboard
             target: ""
+          - name: backup
+            dockerfile: deploy/backup/Dockerfile
+            context: deploy/backup
+            target: ""
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Verify Dockerfile is present
         id: check
@@ -62,11 +68,11 @@ jobs:
 
       - name: Set up QEMU
         if: steps.check.outputs.ready == 'true'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
         if: steps.check.outputs.ready == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
         if: steps.check.outputs.ready == 'true' && github.event_name != 'pull_request'
@@ -79,7 +85,7 @@ jobs:
       - name: Compute image metadata
         if: steps.check.outputs.ready == 'true'
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.image.name }}
           tags: |
@@ -92,7 +98,7 @@ jobs:
 
       - name: Build${{ github.event_name != 'pull_request' && ' & push' || '' }} image
         if: steps.check.outputs.ready == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.image.context }}
           file: ${{ matrix.image.dockerfile }}

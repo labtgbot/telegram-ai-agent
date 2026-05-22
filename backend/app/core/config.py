@@ -10,6 +10,13 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_ADMIN_JWT_SECRET = "change-me"  # noqa: S105 — sentinel, not a real secret
+DEFAULT_APP_SECRET = "change-me"  # noqa: S105 — sentinel, not a real secret
+
+
+class InsecureDefaultSecretError(RuntimeError):
+    """Raised when a placeholder secret leaks into a non-development env."""
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -45,6 +52,55 @@ class Settings(BaseSettings):
         description="Per-dependency timeout (seconds) for /health checks.",
     )
 
+    # ---------------------------------------------------------- DB pool tuning
+    # See docs/PERFORMANCE.md "PostgreSQL connection pool" for sizing
+    # guidance. Values target a single backend pod; multiply by the replica
+    # count to get total open connections.
+    db_pool_size: int = Field(
+        default=20,
+        description=(
+            "Number of persistent connections kept open per worker. "
+            "Total pool capacity is db_pool_size + db_max_overflow."
+        ),
+    )
+    db_max_overflow: int = Field(
+        default=10,
+        description="Extra burst connections allowed above db_pool_size.",
+    )
+    db_pool_timeout: float = Field(
+        default=10.0,
+        description="Seconds a checkout waits for a free connection before raising.",
+    )
+    db_pool_recycle: int = Field(
+        default=1800,
+        description=(
+            "Seconds before a pooled connection is recycled. Keeps the pool "
+            "ahead of pgbouncer / cloud-provider idle-timeouts."
+        ),
+    )
+    db_statement_cache_size: int = Field(
+        default=1024,
+        description="asyncpg per-connection statement cache size.",
+    )
+
+    # ----------------------------------------------------------- cache tuning
+    balance_cache_ttl_seconds: int = Field(
+        default=300,
+        description=(
+            "Soft TTL for the Redis-cached user balance. The cache is "
+            "write-through on every TokenService mutation, so this TTL only "
+            "acts as a safety net against drift."
+        ),
+    )
+    pricing_cache_ttl_seconds: int = Field(
+        default=60,
+        description=(
+            "TTL for the in-process pricing config cache. Issue #36 sets the "
+            "budget at 60 seconds so admin price changes propagate quickly "
+            "while still absorbing the hottest read path."
+        ),
+    )
+
     telegram_bot_token: str = Field(
         default="",
         description="Telegram bot token; used for WebApp initData HMAC + Bot API calls.",
@@ -76,9 +132,46 @@ class Settings(BaseSettings):
         default=50,
         description="Tokens credited to every newly registered Telegram user.",
     )
+    telegram_referral_bonus_tokens: int = Field(
+        default=100,
+        description=(
+            "Tokens credited to a referrer when the user they invited "
+            "completes their first purchase."
+        ),
+    )
+    daily_bonus_enabled: bool = Field(
+        default=True,
+        description="Master switch for the daily-bonus retention loop.",
+    )
+    daily_bonus_amounts: str = Field(
+        default="10,12,15,20",
+        description=(
+            "Comma-separated ladder of daily-bonus amounts indexed by streak "
+            "day (1, 2, 3, …).  The last value is reused for every "
+            "subsequent consecutive day, so the default caps at 20 tokens."
+        ),
+    )
     telegram_set_commands_on_startup: bool = Field(
         default=True,
         description="Call setMyCommands when the FastAPI app starts (skipped without token).",
+    )
+
+    # ----------------------------------------------------------- age verification
+    compliance_age_gate_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enables the age-verification endpoint stub. Off by default — turn "
+            "on only when a feature gated on 18+ ships. See "
+            "docs/legal/AGE_VERIFICATION.md."
+        ),
+    )
+    compliance_age_gate_provider: str = Field(
+        default="self_declared",
+        description=(
+            "Provider for age verification proofs. ``self_declared`` is "
+            "development-only; production should use ``telegram_passport``, "
+            "``veriff`` or ``yoti`` once integrated."
+        ),
     )
 
     composio_api_key: str = Field(
@@ -115,8 +208,12 @@ class Settings(BaseSettings):
     )
 
     admin_jwt_secret: str = Field(
-        default="change-me",
-        description="HS256 secret used to sign admin JWT tokens.",
+        default=DEFAULT_ADMIN_JWT_SECRET,
+        description=(
+            "HS256 secret used to sign admin JWT tokens. The placeholder "
+            "default is rejected at startup outside development — see "
+            "Settings.assert_production_safe()."
+        ),
     )
     admin_jwt_algorithm: str = Field(
         default="HS256",
@@ -151,6 +248,44 @@ class Settings(BaseSettings):
         description="Issuer label shown in TOTP-compatible apps.",
     )
 
+    # ------------------------------------------------------------------ monitoring
+    metrics_enabled: bool = Field(
+        default=True,
+        description="Expose Prometheus metrics at /metrics via prometheus-fastapi-instrumentator.",
+    )
+    metrics_path: str = Field(
+        default="/metrics",
+        description="Path on the FastAPI app where Prometheus metrics are exposed.",
+    )
+    metrics_active_user_window_seconds: int = Field(
+        default=300,
+        description=(
+            "Sliding window (seconds) used by the active-users gauge — a user "
+            "is counted as active when they hit an instrumented endpoint within "
+            "this window. 5-minute default matches Grafana 'now-5m' panels."
+        ),
+    )
+    sentry_dsn: str = Field(
+        default="",
+        description="Sentry DSN — leave empty to disable Sentry initialisation.",
+    )
+    sentry_environment: str = Field(
+        default="",
+        description="Sentry environment tag; falls back to app_env when empty.",
+    )
+    sentry_traces_sample_rate: float = Field(
+        default=0.1,
+        description="Tracing sample rate for Sentry (0..1).",
+    )
+    sentry_profiles_sample_rate: float = Field(
+        default=0.0,
+        description="Profiling sample rate for Sentry (0..1); 0 disables profiling.",
+    )
+    sentry_release: str = Field(
+        default="",
+        description="Release tag forwarded to Sentry; defaults to the app version when empty.",
+    )
+
     @property
     def sync_database_url(self) -> str:
         """Alembic offline mode wants a sync-compatible URL."""
@@ -172,6 +307,50 @@ class Settings(BaseSettings):
         if not raw:
             return ()
         return tuple(chunk.strip() for chunk in raw.split(",") if chunk.strip())
+
+    @property
+    def daily_bonus_ladder(self) -> tuple[int, ...]:
+        """Parse :attr:`daily_bonus_amounts` into a tuple of positive ints.
+
+        Empty / malformed values fall back to ``(10,)`` so the loop is
+        always operational; misconfiguration in production logs a
+        warning at service-load time (see ``daily_bonus.py``).
+        """
+        raw = (self.daily_bonus_amounts or "").strip()
+        out: list[int] = []
+        for chunk in raw.split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            try:
+                value = int(chunk)
+            except ValueError:
+                continue
+            if value > 0:
+                out.append(value)
+        return tuple(out) if out else (10,)
+
+    def assert_production_safe(self) -> None:
+        """Fail loudly when a placeholder secret leaks into a real environment.
+
+        Called from the app lifespan. In development (``APP_ENV`` in
+        ``{development, dev, local, test, ci}``) placeholders are tolerated
+        so contributors can run ``uvicorn --reload`` without touching env
+        files. Outside that, ``InsecureDefaultSecretError`` is raised before
+        the API starts serving — this is the safety net required by
+        ``docs/security/audit-report.md`` finding F-001.
+        """
+        if self.app_env.lower() in {"development", "dev", "local", "test", "ci"}:
+            return
+        offenders: list[str] = []
+        if (self.admin_jwt_secret or "").strip() in {"", DEFAULT_ADMIN_JWT_SECRET}:
+            offenders.append("ADMIN_JWT_SECRET")
+        if offenders:
+            raise InsecureDefaultSecretError(
+                "Refusing to start with placeholder secret(s) in "
+                f"app_env={self.app_env!r}: {', '.join(offenders)}. "
+                "Override the value(s) via environment / sealed secret."
+            )
 
     @property
     def super_admin_ids(self) -> set[int]:

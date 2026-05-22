@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body {
+  height: 100%;
+  background-color: theme("colors.slate.50");
+  color: theme("colors.slate.900");
+}
+
+@media (prefers-color-scheme: dark) {
+  html,
+  body {
+    background-color: theme("colors.slate.950");
+    color: theme("colors.slate.50");
+  }
+}
+
+body {
+  font-family: theme("fontFamily.sans");
+}

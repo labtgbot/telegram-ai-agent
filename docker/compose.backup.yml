@@ -1,0 +1,101 @@
+# Backup compose overlay.
+#
+# Layers backup CronJob-like services on top of docker/compose.prod.yml. Use:
+#
+#   docker compose \
+#     -f docker/compose.prod.yml \
+#     -f docker/compose.backup.yml \
+#     --env-file .env.prod \
+#     up -d backup-supervisor
+#
+# `backup-supervisor` is a tiny cron container that schedules postgres /
+# redis / media / prune jobs against the running stack. Each backup
+# invocation is a short-lived process inside the supervisor; we don't run
+# them as separate containers so we don't have to wire the same env file
+# four times.
+#
+# To exercise a one-off backup interactively (e.g. the very first run):
+#
+#   docker compose -f docker/compose.prod.yml -f docker/compose.backup.yml \
+#     --env-file .env.prod run --rm backup-runner postgres-backup.sh
+#
+# Required vars (in .env.prod):
+#   POSTGRES_PASSWORD     — same as the main stack
+#   BACKUP_S3_BUCKET      — destination bucket
+#   BACKUP_S3_REGION      — destination region
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+# Optional:
+#   BACKUP_S3_ENDPOINT, BACKUP_KMS_KEY_ID, BACKUP_RETENTION_DAYS,
+#   BACKUP_NOTIFY_WEBHOOK, MEDIA_S3_BUCKET
+
+services:
+  backup-runner:
+    # `run`-style sidecar that holds the backup image. Not started by `up`;
+    # invoked manually via `docker compose run backup-runner <script>`.
+    image: ${BACKUP_IMAGE:-ghcr.io/labtgbot/telegram-ai-agent/backup:latest}
+    container_name: tgai-backup-runner
+    profiles: ["backup-runner"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: telegram_ai_agent
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_KMS_KEY_ID: ${BACKUP_KMS_KEY_ID:-}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      BACKUP_WAL_RETENTION_DAYS: ${BACKUP_WAL_RETENTION_DAYS:-7}
+      MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-}
+      BACKUP_NOTIFY_WEBHOOK: ${BACKUP_NOTIFY_WEBHOOK:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      BACKUP_SMOKE_TABLES: ${BACKUP_SMOKE_TABLES:-users}
+    entrypoint: ["/bin/bash"]
+    command: ["-lc", "echo 'Run: docker compose run backup-runner -- <script>'"]
+
+  backup-supervisor:
+    # Long-running cron container — drives the daily / quarterly schedule.
+    # Uses supercronic (single-binary cron designed for containers); install
+    # is done at build time via the Dockerfile.
+    image: ${BACKUP_IMAGE:-ghcr.io/labtgbot/telegram-ai-agent/backup:latest}
+    container_name: tgai-backup-supervisor
+    restart: unless-stopped
+    profiles: ["backup-supervisor"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: telegram_ai_agent
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET}
+      BACKUP_S3_REGION: ${BACKUP_S3_REGION:-}
+      BACKUP_S3_ENDPOINT: ${BACKUP_S3_ENDPOINT:-}
+      BACKUP_KMS_KEY_ID: ${BACKUP_KMS_KEY_ID:-}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      BACKUP_WAL_RETENTION_DAYS: ${BACKUP_WAL_RETENTION_DAYS:-7}
+      MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-}
+      BACKUP_NOTIFY_WEBHOOK: ${BACKUP_NOTIFY_WEBHOOK:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      BACKUP_SMOKE_TABLES: ${BACKUP_SMOKE_TABLES:-users}
+    volumes:
+      - ./backup-crontab:/etc/tgai/crontab:ro
+    entrypoint: ["/usr/local/bin/supercronic"]
+    command: ["-quiet", "/etc/tgai/crontab"]

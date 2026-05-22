@@ -263,11 +263,16 @@ def build_app(monkeypatch, fake_settings, stub_user, usage_logs, fake_transactio
         "app.core.config.get_settings", lambda: fake_settings, raising=True
     )
     monkeypatch.setattr("app.auth.dependencies.get_settings", lambda: fake_settings)
+    # ``user.py`` imports ``get_settings`` at module load time, so we need to
+    # rebind the name on the local module as well — otherwise routes still
+    # see the original implementation that reads from the real environment.
+    monkeypatch.setattr(user_module, "get_settings", lambda: fake_settings)
 
     # Patch the TokenService to a stub that pulls from the in-memory store.
     class _FakeService:
-        def __init__(self, session):
+        def __init__(self, session, balance_cache=None):
             self.session = session
+            self.balance_cache = balance_cache
 
         async def get_balance(self, user_id: int) -> int:
             for u in store.values():
@@ -293,7 +298,7 @@ def build_app(monkeypatch, fake_settings, stub_user, usage_logs, fake_transactio
     monkeypatch.setattr(user_module, "TokenService", _FakeService)
 
     # Patch the daily-bonus probe so we don't need a Transaction table query.
-    async def fake_daily_bonus_available(session, user_id: int) -> bool:
+    async def fake_daily_bonus_available(session, redis, user_id: int) -> bool:
         return not daily_bonus_cooldown.get(user_id, False)
 
     monkeypatch.setattr(
@@ -327,6 +332,18 @@ def build_app(monkeypatch, fake_settings, stub_user, usage_logs, fake_transactio
         user_module, "_list_transactions", fake_list_transactions
     )
 
+    # Patch referral counters so /user/referral doesn't need a DB.
+    async def fake_count_referrals(session, user_id: int) -> int:
+        return 0
+
+    async def fake_sum_referral_bonus(session, user_id: int) -> int:
+        return 0
+
+    monkeypatch.setattr(user_module, "_count_referrals", fake_count_referrals)
+    monkeypatch.setattr(
+        user_module, "_sum_referral_bonus", fake_sum_referral_bonus
+    )
+
     app = create_app()
 
     from app.auth.dependencies import _settings_dep
@@ -337,6 +354,7 @@ def build_app(monkeypatch, fake_settings, stub_user, usage_logs, fake_transactio
 
     app.dependency_overrides[real_get_session] = _yield_none
     app.dependency_overrides[_settings_dep] = lambda: fake_settings
+    app.dependency_overrides[user_module._redis_dep] = lambda: None
 
     return app, store, daily_bonus_cooldown, usage_logs, fake_transactions
 
@@ -668,34 +686,22 @@ async def test_referral_builds_https_link_when_bot_username_set(build_app) -> No
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["referral_code"] == "REF-42"
-    assert body["start_param"] == "ref_REF-42"
-    assert body["bot_username"] == "test_ai_bot"
-    assert body["referral_link"] == "https://t.me/test_ai_bot?start=ref_REF-42"
+    assert body["referral_link"] == "https://t.me/test_ai_bot?start=REF-42"
+    assert body["referrals_count"] == 0
+    assert body["bonus_tokens_earned"] == 0
 
 
 @pytest.mark.asyncio
-async def test_referral_strips_leading_at_from_bot_username(
-    build_app, fake_settings
-) -> None:
-    fake_settings.telegram_bot_username = "@another_bot"
-    app, *_ = build_app
-    init = _build_init_data(telegram_id=42)
-    async with await _client(app) as c:
-        resp = await c.get(
-            "/api/v1/user/referral",
-            headers={"X-Telegram-Init-Data": init},
-        )
-    body = resp.json()
-    assert resp.status_code == 200
-    assert body["bot_username"] == "another_bot"
-    assert body["referral_link"].startswith("https://t.me/another_bot?start=ref_")
-
-
-@pytest.mark.asyncio
-async def test_referral_falls_back_to_tg_resolve_when_username_blank(
-    build_app, fake_settings
+async def test_referral_falls_back_when_bot_username_blank(
+    build_app, fake_settings, monkeypatch
 ) -> None:
     fake_settings.telegram_bot_username = ""
+    monkeypatch.setattr(
+        "app.core.config.get_settings", lambda: fake_settings, raising=True
+    )
+    from app.api.v1 import user as user_module
+
+    monkeypatch.setattr(user_module, "get_settings", lambda: fake_settings)
     app, *_ = build_app
     init = _build_init_data(telegram_id=42)
     async with await _client(app) as c:
@@ -705,8 +711,7 @@ async def test_referral_falls_back_to_tg_resolve_when_username_blank(
         )
     body = resp.json()
     assert resp.status_code == 200
-    assert body["bot_username"] is None
-    assert body["referral_link"] == "tg://resolve?start=ref_REF-42"
+    assert body["referral_link"] == "start=REF:REF-42"
 
 
 @pytest.mark.asyncio

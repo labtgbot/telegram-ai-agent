@@ -1,0 +1,220 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/**"
+      - "docker/compose.prod.yml"
+      - "docker/compose.backup.yml"
+      - "docker/Caddyfile.prod"
+      - "docker/backup-crontab"
+      - ".github/workflows/deploy.yml"
+  pull_request:
+    paths:
+      - "deploy/**"
+      - "docker/compose.prod.yml"
+      - "docker/compose.backup.yml"
+      - "docker/Caddyfile.prod"
+      - "docker/backup-crontab"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  helm-lint:
+    name: Helm lint + template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.1
+
+      - name: Helm dependency update
+        working-directory: deploy/helm/telegram-ai-agent
+        run: |
+          if grep -q "^dependencies:" Chart.yaml; then
+            helm dependency update
+          else
+            echo "No dependencies declared — skipping."
+          fi
+
+      - name: Helm lint (default values)
+        run: helm lint deploy/helm/telegram-ai-agent
+
+      - name: Helm lint (staging)
+        run: |
+          helm lint deploy/helm/telegram-ai-agent \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-staging.yaml \
+            --set image.tag=0.0.0-ci
+
+      - name: Helm lint (production)
+        run: |
+          helm lint deploy/helm/telegram-ai-agent \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-production.yaml \
+            --set image.tag=0.0.0-ci
+
+      - name: Helm template (staging) renders cleanly
+        run: |
+          helm template telegram-ai-agent deploy/helm/telegram-ai-agent \
+            --namespace tgai-staging \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-staging.yaml \
+            --set image.tag=0.0.0-ci > /tmp/staging.yaml
+          test -s /tmp/staging.yaml
+          echo "::notice title=Helm::staging render: $(wc -l < /tmp/staging.yaml) lines"
+
+      - name: Helm template (production) renders cleanly
+        run: |
+          helm template telegram-ai-agent deploy/helm/telegram-ai-agent \
+            --namespace tgai-prod \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-production.yaml \
+            --set image.tag=0.0.0-ci > /tmp/prod.yaml
+          test -s /tmp/prod.yaml
+          echo "::notice title=Helm::production render: $(wc -l < /tmp/prod.yaml) lines"
+
+      - name: Helm template (rollouts / canary) renders cleanly
+        run: |
+          helm template telegram-ai-agent deploy/helm/telegram-ai-agent \
+            --namespace tgai-prod \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-production.yaml \
+            --set image.tag=0.0.0-ci \
+            --set backend.rollout.enabled=true > /tmp/canary.yaml
+          grep -q "^# Source: telegram-ai-agent/templates/backend-rollout.yaml" /tmp/canary.yaml
+          if grep -q "^# Source: telegram-ai-agent/templates/backend-deployment.yaml" /tmp/canary.yaml; then
+            echo "ERROR: backend rendered as both Deployment and Rollout"
+            exit 1
+          fi
+
+      - name: Helm template (backup enabled) renders cleanly
+        run: |
+          helm template telegram-ai-agent deploy/helm/telegram-ai-agent \
+            --namespace tgai-prod \
+            -f deploy/helm/telegram-ai-agent/values.yaml \
+            -f deploy/helm/telegram-ai-agent/values-production.yaml \
+            --set image.tag=0.0.0-ci \
+            --set backup.enabled=true \
+            --set backup.s3.bucket=ci-bucket \
+            --set backup.s3.region=eu-central-1 \
+            --set backup.image.repository=ghcr.io/labtgbot/telegram-ai-agent/backup \
+            --set backup.image.tag=0.0.0-ci > /tmp/backup.yaml
+          test -s /tmp/backup.yaml
+          # Sanity-check that CronJobs were rendered.
+          cron_count=$(grep -c "^kind: CronJob$" /tmp/backup.yaml || true)
+          if [ "$cron_count" -lt 4 ]; then
+            echo "ERROR: expected >= 4 CronJobs when backup enabled, got $cron_count"
+            exit 1
+          fi
+          echo "::notice title=Helm::backup render: $cron_count CronJobs, $(wc -l < /tmp/backup.yaml) lines"
+
+      - name: Validate Kubernetes manifests against schemas
+        uses: instrumenta/kubeval-action@master
+        continue-on-error: true
+        with:
+          files: /tmp/staging.yaml,/tmp/prod.yaml,/tmp/backup.yaml
+
+  backup-scripts-test:
+    name: Backup scripts — shellcheck + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Shellcheck backup scripts
+        run: |
+          shellcheck -x \
+            deploy/backup/scripts/*.sh \
+            deploy/backup/scripts/lib/*.sh \
+            deploy/backup/tests/run-tests.sh
+
+      - name: Run backup helper unit tests
+        run: bash deploy/backup/tests/run-tests.sh
+
+  compose-prod-validate:
+    name: docker compose.prod.yml — parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: docker compose config
+        env:
+          POSTGRES_PASSWORD: ci-placeholder
+          DOMAIN: bot.example.com
+          ADMIN_DOMAIN: admin.example.com
+          ACME_EMAIL: ci@example.com
+        run: |
+          touch .env.prod
+          docker compose -f docker/compose.prod.yml --env-file .env.prod config > /tmp/compose.prod.json
+          test -s /tmp/compose.prod.json
+
+  compose-backup-validate:
+    name: docker compose.backup.yml — parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate compose.backup.yml structure
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+          with open("docker/compose.backup.yml") as f:
+              cfg = yaml.safe_load(f)
+          svc = sorted(cfg.get("services", {}))
+          for name in ("backup-supervisor", "backup-runner"):
+              assert name in svc, f"missing service {name!r}; got {svc}"
+          for name in ("backup-supervisor", "backup-runner"):
+              s = cfg["services"][name]
+              assert "image" in s, f"{name}: image missing"
+              assert "environment" in s, f"{name}: environment missing"
+              env = s["environment"]
+              for required in ("PGHOST", "PGUSER", "BACKUP_S3_BUCKET"):
+                  assert required in env, f"{name}: env var {required} missing"
+          print("ok:", svc)
+          PY
+
+      - name: docker compose config (compose.prod.yml + compose.backup.yml)
+        env:
+          POSTGRES_PASSWORD: ci-placeholder
+          DOMAIN: bot.example.com
+          ADMIN_DOMAIN: admin.example.com
+          ACME_EMAIL: ci@example.com
+          BACKUP_S3_BUCKET: ci-bucket
+          BACKUP_S3_REGION: eu-central-1
+          AWS_ACCESS_KEY_ID: ci
+          AWS_SECRET_ACCESS_KEY: ci
+        run: |
+          touch .env.prod
+          # The backup services live under compose profiles, so they're
+          # filtered out of `docker compose config` unless we opt in.
+          docker compose \
+            -f docker/compose.prod.yml \
+            -f docker/compose.backup.yml \
+            --profile backup-supervisor \
+            --profile backup-runner \
+            --env-file .env.prod config > /tmp/compose.backup.merged.yml
+          test -s /tmp/compose.backup.merged.yml
+          python3 - <<'PY'
+          import yaml
+          with open("/tmp/compose.backup.merged.yml") as f:
+              cfg = yaml.safe_load(f)
+          svc = sorted(cfg.get("services", {}))
+          for name in ("backup-supervisor", "backup-runner"):
+              assert name in svc, f"missing {name!r} after merge; got {svc}"
+          print("merged services:", svc)
+          PY

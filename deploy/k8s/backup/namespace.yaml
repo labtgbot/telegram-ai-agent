@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tgai-backup
+  labels:
+    app.kubernetes.io/part-of: telegram-ai-agent
+    app.kubernetes.io/component: backup

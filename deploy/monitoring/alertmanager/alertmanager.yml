@@ -1,0 +1,57 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: telegram-oncall
+  group_by: ["alertname", "service", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Page-severity alerts: notify on-call immediately, repeat sooner.
+    - matchers:
+        - severity = page
+      receiver: telegram-oncall
+      group_wait: 10s
+      group_interval: 1m
+      repeat_interval: 1h
+    # Ticket-severity alerts go to the same chat with longer cadence.
+    - matchers:
+        - severity = ticket
+      receiver: telegram-oncall
+      group_wait: 1m
+      group_interval: 10m
+      repeat_interval: 12h
+
+receivers:
+  - name: telegram-oncall
+    telegram_configs:
+      # ALERTMANAGER_TELEGRAM_BOT_TOKEN and ALERTMANAGER_TELEGRAM_CHAT_ID
+      # are injected from a Kubernetes Secret / sealed secret. Do not
+      # commit real credentials here.
+      - bot_token_file: /etc/alertmanager/secrets/telegram_bot_token
+        chat_id: 0
+        parse_mode: HTML
+        send_resolved: true
+        message: |
+          {{ if eq .Status "firing" -}}
+          🚨 <b>[{{ .CommonLabels.severity | toUpper }}] {{ .CommonLabels.alertname }}</b>
+          {{- else -}}
+          ✅ <b>[RESOLVED] {{ .CommonLabels.alertname }}</b>
+          {{- end }}
+          Service: <code>{{ .CommonLabels.service }}</code>
+          Cluster: <code>{{ .CommonLabels.cluster }}</code>
+
+          {{ range .Alerts -}}
+          • <b>{{ .Annotations.summary }}</b>
+            {{ .Annotations.description }}
+            {{ if .Annotations.runbook_url }}<a href="{{ .Annotations.runbook_url }}">runbook</a>{{ end }}
+            Started: {{ .StartsAt.Format "2006-01-02 15:04:05 UTC" }}
+          {{ end }}
+
+inhibit_rules:
+  - source_matchers:
+      - severity = page
+    target_matchers:
+      - severity = ticket
+    equal: ["alertname", "service"]

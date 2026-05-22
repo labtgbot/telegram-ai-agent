@@ -6,9 +6,9 @@ import { ReferralLink } from "@/components/billing/ReferralLink";
 
 const DATA = {
   referral_code: "abc123",
-  referral_link: "https://t.me/bot?start=ref_abc123",
-  bot_username: "bot",
-  start_param: "ref_abc123",
+  referral_link: "https://t.me/bot?start=abc123",
+  referrals_count: 0,
+  bonus_tokens_earned: 0,
 };
 
 describe("ReferralLink", () => {

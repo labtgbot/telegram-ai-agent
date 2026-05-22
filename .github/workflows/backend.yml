@@ -6,6 +6,7 @@ on:
     paths:
       - "backend/**"
       - "scripts/**"
+      - "load/**"
       - "docker/Dockerfile.backend"
       - "docker/compose.yml"
       - ".github/workflows/backend.yml"
@@ -14,6 +15,7 @@ on:
     paths:
       - "backend/**"
       - "scripts/**"
+      - "load/**"
       - "docker/Dockerfile.backend"
       - "docker/compose.yml"
       - ".github/workflows/backend.yml"
@@ -37,7 +39,7 @@ jobs:
     name: Lint (ruff)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
@@ -60,7 +62,7 @@ jobs:
     name: Type-check (mypy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
@@ -112,7 +114,7 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
@@ -150,7 +152,7 @@ jobs:
 
       - name: Upload coverage XML artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-coverage-xml
           path: backend/coverage.xml
@@ -158,7 +160,7 @@ jobs:
 
       - name: Upload coverage HTML artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: backend-coverage-html
           path: backend/htmlcov
@@ -197,7 +199,7 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
         uses: actions/setup-python@v5
@@ -234,6 +236,125 @@ jobs:
           echo "----- uvicorn.log -----"
           cat backend/uvicorn.log || true
           exit 1
+
+      - name: Stop uvicorn
+        if: always()
+        working-directory: backend
+        run: |
+          if [ -f uvicorn.pid ]; then
+            kill "$(cat uvicorn.pid)" || true
+          fi
+
+  load-smoke:
+    name: Load smoke (locust → POST /generate/text)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: telegram_ai_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d telegram_ai_agent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/telegram_ai_agent
+      REDIS_URL: redis://localhost:6379/0
+      TELEGRAM_BOT_TOKEN: "1234567890:LOAD-SMOKE-AAAAAAAAAAAAAAAAAAAAAA"
+      # Force the mock Composio path even if a key leaks into the env.
+      COMPOSIO_API_KEY: ""
+      # Tell build_client to seed the mock with a real text payload so
+      # /generate/text returns 200 instead of raising TextProviderError.
+      COMPOSIO_MOCK_TEXT_RESPONSE: "Mock generation response for load smoke."
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install backend + locust
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "."
+          pip install "locust>=2.30,<3"
+
+      - name: Apply migrations
+        working-directory: backend
+        run: alembic upgrade head
+
+      - name: Seed load fixtures (rate-limit overrides + token-rich user)
+        run: python load/seed_load.py
+
+      - name: Start uvicorn
+        working-directory: backend
+        run: |
+          nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 \
+              --workers 2 --no-access-log \
+              > uvicorn.log 2>&1 &
+          echo $! > uvicorn.pid
+
+      - name: Wait for /health
+        run: |
+          for i in {1..30}; do
+            if curl --fail --silent http://localhost:8000/api/v1/health > /dev/null; then
+              echo "API is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "----- uvicorn.log -----"
+          cat backend/uvicorn.log || true
+          exit 1
+
+      - name: Run locust smoke (20 users, 20 s)
+        env:
+          BOT_TOKEN: ${{ env.TELEGRAM_BOT_TOKEN }}
+        run: |
+          mkdir -p load/out
+          locust -f load/locustfile.py \
+            --host http://127.0.0.1:8000 \
+            --headless -u 20 -r 20 --run-time 20s \
+            --csv=load/out/smoke \
+            --exit-code-on-error 1
+
+      - name: Check SLO (p95 < 500 ms, no failures)
+        run: |
+          python load/check_results.py load/out/smoke_stats.csv \
+            --max-p95-ms 500 \
+            --max-failure-ratio 0.0 \
+            --min-rps 10
+
+      - name: Upload locust report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-smoke-results
+          path: |
+            load/out
+            backend/uvicorn.log
+          if-no-files-found: warn
 
       - name: Stop uvicorn
         if: always()

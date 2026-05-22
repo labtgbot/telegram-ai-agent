@@ -3,6 +3,30 @@ import { render, screen } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/services/userApi", () => ({
+  userApi: {
+    getDailyBonusStatus: vi.fn().mockResolvedValue({
+      available: false,
+      enabled: true,
+      streak_day: 0,
+      next_amount: 10,
+      last_claim_date: null,
+      next_available_at: "2026-05-17T00:00:00+00:00",
+      amounts: [10, 12, 15, 20],
+    }),
+    claimDailyBonus: vi.fn(),
+  },
+  ApiError: class ApiError extends Error {
+    status: number;
+    body: unknown;
+    constructor(message: string, status: number, body: unknown) {
+      super(message);
+      this.status = status;
+      this.body = body;
+    }
+  },
+}));
+
 import { AppLayout } from "@/layouts/AppLayout";
 import { BalancePage } from "@/pages/BalancePage";
 import { HomePage } from "@/pages/HomePage";

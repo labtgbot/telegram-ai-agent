@@ -1,0 +1,26 @@
+{{- if .Values.backup.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "telegram-ai-agent.componentName" (dict "ctx" . "name" "backup-config") }}
+  labels:
+    {{- include "telegram-ai-agent.componentLabels" (dict "ctx" . "name" "backup") | nindent 4 }}
+data:
+  BACKUP_S3_BUCKET: {{ .Values.backup.s3.bucket | quote }}
+  BACKUP_S3_REGION: {{ .Values.backup.s3.region | quote }}
+  BACKUP_S3_ENDPOINT: {{ .Values.backup.s3.endpoint | quote }}
+  BACKUP_KMS_KEY_ID: {{ .Values.backup.s3.kmsKeyId | quote }}
+  BACKUP_RETENTION_DAYS: {{ .Values.backup.retentionDays | quote }}
+  BACKUP_WAL_RETENTION_DAYS: {{ .Values.backup.walRetentionDays | quote }}
+  PGHOST: {{ .Values.backup.postgres.host | quote }}
+  PGPORT: {{ .Values.backup.postgres.port | quote }}
+  PGUSER: {{ .Values.backup.postgres.user | quote }}
+  PGDATABASE: {{ .Values.backup.postgres.database | quote }}
+  PG_DUMP_EXTRA_ARGS: {{ .Values.backup.postgres.extraArgs | quote }}
+  REDIS_HOST: {{ .Values.backup.redis.host | quote }}
+  REDIS_PORT: {{ .Values.backup.redis.port | quote }}
+  MEDIA_S3_BUCKET: {{ .Values.backup.media.sourceBucket | quote }}
+  MEDIA_S3_PREFIX: {{ .Values.backup.media.sourcePrefix | quote }}
+  MEDIA_SYNC_DELETE: {{ .Values.backup.media.mirrorDeletes | quote }}
+  BACKUP_SMOKE_TABLES: {{ .Values.backup.verify.smokeTables | quote }}
+{{- end }}

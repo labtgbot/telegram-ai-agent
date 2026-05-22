@@ -1,0 +1,83 @@
+{{- if and .Values.backend.enabled .Values.backend.rollout.enabled }}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ include "telegram-ai-agent.componentName" (dict "ctx" . "name" "backend") }}
+  labels:
+    {{- include "telegram-ai-agent.componentLabels" (dict "ctx" . "name" "backend") | nindent 4 }}
+spec:
+  {{- if not .Values.backend.autoscaling.enabled }}
+  replicas: {{ .Values.backend.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "telegram-ai-agent.componentSelectorLabels" (dict "ctx" . "name" "backend") | nindent 6 }}
+  strategy:
+    {{- if eq .Values.backend.rollout.strategy "blueGreen" }}
+    blueGreen:
+      activeService: {{ include "telegram-ai-agent.componentName" (dict "ctx" . "name" "backend") }}
+      previewService: {{ include "telegram-ai-agent.componentName" (dict "ctx" . "name" "backend-preview") }}
+      autoPromotionEnabled: false
+    {{- else }}
+    canary:
+      steps:
+        {{- toYaml .Values.backend.rollout.canary.steps | nindent 8 }}
+    {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "telegram-ai-agent.componentSelectorLabels" (dict "ctx" . "name" "backend") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.backend.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "telegram-ai-agent.backend.serviceAccountName" . }}
+      {{- include "telegram-ai-agent.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          image: {{ include "telegram-ai-agent.image" (dict "ctx" . "component" "backend") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "telegram-ai-agent.componentName" (dict "ctx" . "name" "backend-config") }}
+            - secretRef:
+                name: {{ .Values.secret.name }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.backend.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.backend.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.probes.liveness.periodSeconds }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.backend.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.backend.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.probes.readiness.periodSeconds }}
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

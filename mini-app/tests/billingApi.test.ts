@@ -75,9 +75,9 @@ describe("billing API", () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       jsonResponse({
         referral_code: "abc",
-        referral_link: "https://t.me/bot?start=ref_abc",
-        bot_username: "bot",
-        start_param: "ref_abc",
+        referral_link: "https://t.me/bot?start=abc",
+        referrals_count: 0,
+        bonus_tokens_earned: 0,
       }),
     );
     const data = await fetchReferral(makeClient(fetchImpl));
