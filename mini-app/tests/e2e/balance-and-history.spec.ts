@@ -3,11 +3,41 @@ import { expect, test } from "@playwright/test";
 import { installTelegramMock, mockApi } from "./helpers/telegram-mock";
 
 test.describe("balance and history pages", () => {
-  test("shows the placeholder when the store balance is empty", async ({ page }) => {
+  test("renders the balance card with the value returned by the API", async ({ page }) => {
     await installTelegramMock(page);
+    await mockApi(
+      page,
+      "/user/balance",
+      {
+        token_balance: 0,
+        is_premium: false,
+        premium_expires_at: null,
+        daily_bonus_available: false,
+      },
+      { method: "GET" },
+    );
+    await mockApi(page, "/payment/packages", { items: [] }, { method: "GET" });
+    await mockApi(
+      page,
+      "/user/referral",
+      {
+        referral_code: "REF-1",
+        referrals_count: 0,
+        bonus_tokens_earned: 0,
+        referral_link: "https://t.me/test_bot?start=REF-1",
+      },
+      { method: "GET" },
+    );
+    await mockApi(
+      page,
+      "/user/transactions",
+      { items: [], total: 0, page: 1, limit: 10, has_more: false },
+      { method: "GET" },
+    );
+
     await page.goto("/balance");
-    await expect(page.getByTestId("balance")).toHaveText("—");
-    await expect(page.getByText(/Buy more tokens/)).toBeVisible();
+    await expect(page.getByTestId("balance-card")).toBeVisible();
+    await expect(page.getByTestId("balance")).toHaveText("0");
   });
 
   test("renders the usage history page with mocked data", async ({ page }) => {
