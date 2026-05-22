@@ -26,6 +26,12 @@ export interface TelegramMockOptions {
   platform?: string;
 }
 
+export interface TelegramMockResult {
+  initData: string;
+  user: TelegramMockUser;
+  goto: (path?: string) => Promise<void>;
+}
+
 const DEFAULT_USER: TelegramMockUser = {
   id: 4242,
   first_name: "Ada",
@@ -56,10 +62,9 @@ const DARK_THEME: Record<string, string> = {
 };
 
 /**
- * Seed the Telegram Mini App SDK (@twa-dev/sdk) by populating `location.hash`
- * with the parameters Telegram normally injects. The SDK reads the hash on
- * import, so the mocked initData/theme/platform become observable through
- * `window.Telegram.WebApp` without overwriting it.
+ * Seed the Telegram Mini App SDK (@twa-dev/sdk) by exposing the Telegram
+ * globals before app modules import the SDK. This keeps route URLs stable for
+ * React Router while making `window.Telegram.WebApp` behave like Telegram.
  *
  * Returns the resolved `initData` string (the value `WebApp.initData` will
  * have) so tests can assert it against captured request headers.
@@ -67,7 +72,7 @@ const DARK_THEME: Record<string, string> = {
 export async function installTelegramMock(
   page: Page,
   options: TelegramMockOptions = {},
-): Promise<{ initData: string; user: TelegramMockUser }> {
+): Promise<TelegramMockResult> {
   const user = options.user ?? DEFAULT_USER;
   const authDate = options.authDate ?? Math.floor(Date.now() / 1000);
   const hash = options.hash ?? "mockhash";
@@ -85,27 +90,64 @@ export async function installTelegramMock(
   const version = options.version ?? "7.10";
   const platform = options.platform ?? "tdesktop";
 
-  const hashParts = [
-    `tgWebAppData=${encodeURIComponent(innerQuery)}`,
-    `tgWebAppVersion=${encodeURIComponent(version)}`,
-    `tgWebAppPlatform=${encodeURIComponent(platform)}`,
-    `tgWebAppThemeParams=${encodeURIComponent(JSON.stringify(themeParams))}`,
-  ];
-  const locationHashValue = `#${hashParts.join("&")}`;
+  const initDataUnsafe = Object.fromEntries(new URLSearchParams(innerQuery));
+  if (typeof initDataUnsafe.user === "string") {
+    initDataUnsafe.user = JSON.parse(initDataUnsafe.user) as never;
+  }
+  const colorScheme = options.colorScheme ?? "light";
 
-  await page.addInitScript((hashValue: string) => {
-    try {
-      if (window.location.hash !== hashValue) {
-        const next =
-          window.location.pathname + window.location.search + hashValue;
-        window.history.replaceState(null, "", next);
-      }
-    } catch {
-      // ignore — the SDK will fall back to defaults if the hash isn't readable
-    }
-  }, locationHashValue);
+  const install = async () => page.evaluate(
+    ({ initData, initDataUnsafe, themeParams, colorScheme, version, platform }) => {
+      window.Telegram = {
+        WebApp: {
+          initData,
+          initDataUnsafe,
+          themeParams,
+          colorScheme,
+          version,
+          platform,
+          ready: () => undefined,
+          expand: () => undefined,
+          onEvent: (_event: string, callback: () => void) => {
+            queueMicrotask(callback);
+          },
+          offEvent: () => undefined,
+        },
+      };
+      window.dispatchEvent(new Event("telegramMockChanged"));
+    },
+    { initData: innerQuery, initDataUnsafe, themeParams, colorScheme, version, platform },
+  );
+  await page.addInitScript(
+    ({ initData, initDataUnsafe, themeParams, colorScheme, version, platform }) => {
+      window.Telegram = {
+        WebApp: {
+          initData,
+          initDataUnsafe,
+          themeParams,
+          colorScheme,
+          version,
+          platform,
+          ready: () => undefined,
+          expand: () => undefined,
+          onEvent: (_event: string, callback: () => void) => {
+            queueMicrotask(callback);
+          },
+          offEvent: () => undefined,
+        },
+      };
+    },
+    { initData: innerQuery, initDataUnsafe, themeParams, colorScheme, version, platform },
+  );
 
-  return { initData: innerQuery, user };
+  return {
+    initData: innerQuery,
+    user,
+    goto: async (path = "/") => {
+      await page.goto(path);
+      await install();
+    },
+  };
 }
 
 /**
