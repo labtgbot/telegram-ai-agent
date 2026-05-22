@@ -64,7 +64,7 @@ jobs:
             --format json --output ../pip-audit.json
       - name: Upload pip-audit report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pip-audit-report
           path: pip-audit.json
@@ -109,7 +109,7 @@ jobs:
 
       - name: Upload npm audit report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-audit-${{ matrix.workspace }}
           path: npm-audit-${{ matrix.workspace }}.json
@@ -153,7 +153,7 @@ jobs:
 
       - name: Upload Bandit SARIF as artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bandit-sarif
           path: bandit.sarif
@@ -207,7 +207,7 @@ jobs:
 
       - name: Upload Semgrep SARIF as artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: semgrep-sarif
           path: semgrep.sarif
@@ -268,7 +268,7 @@ jobs:
 
       - name: Upload Trivy fs SARIF as artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trivy-fs-sarif
           path: trivy-fs.sarif
@@ -322,7 +322,7 @@ jobs:
 
       - name: Upload Trivy backend SARIF as artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: trivy-image-backend-sarif
           path: trivy-image-backend.sarif
