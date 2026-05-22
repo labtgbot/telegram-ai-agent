@@ -28,7 +28,7 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json(payload, { status: upstream.status });
   }
 
-  persistTokens({
+  await persistTokens({
     access_token: payload.access_token,
     refresh_token: payload.refresh_token,
     expires_in: payload.expires_in,

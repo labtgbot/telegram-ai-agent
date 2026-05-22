@@ -11,7 +11,7 @@ import { serverEnv } from "@/lib/env";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
-  const token = readAccessToken();
+  const token = await readAccessToken();
   if (!token) {
     return NextResponse.json({ detail: "unauthorized" }, { status: 401 });
   }

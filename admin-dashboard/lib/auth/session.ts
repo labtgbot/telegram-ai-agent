@@ -15,7 +15,7 @@ export interface AdminSession {
  * role-aware UI; the middleware enforces redirects before they run.
  */
 export async function getAdminSession(): Promise<AdminSession | undefined> {
-  const token = readAccessToken();
+  const token = await readAccessToken();
   if (!token) return undefined;
   try {
     const payload = await verifyAdminAccessToken(token);

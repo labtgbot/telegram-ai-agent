@@ -4,7 +4,7 @@ import { clearTokens, persistTokens, readRefreshToken } from "@/lib/auth/cookies
 import { serverEnv } from "@/lib/env";
 
 export async function POST(): Promise<NextResponse> {
-  const refresh = readRefreshToken();
+  const refresh = await readRefreshToken();
   if (!refresh) {
     return NextResponse.json({ code: "missing_refresh_token" }, { status: 401 });
   }
@@ -16,7 +16,7 @@ export async function POST(): Promise<NextResponse> {
   });
 
   if (!upstream.ok) {
-    clearTokens();
+    await clearTokens();
     const payload = await upstream.json().catch(() => ({}));
     return NextResponse.json(payload, { status: upstream.status });
   }
@@ -26,6 +26,6 @@ export async function POST(): Promise<NextResponse> {
     refresh_token: string;
     expires_in: number;
   };
-  persistTokens(payload);
+  await persistTokens(payload);
   return NextResponse.json({ status: "ok", expires_in: payload.expires_in });
 }
