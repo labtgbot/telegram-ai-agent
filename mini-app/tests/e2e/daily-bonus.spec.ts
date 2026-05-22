@@ -47,7 +47,7 @@ test.describe("daily bonus claim flow", () => {
       },
     );
 
-    // New BalancePage reads /user/balance via React Query, so we mock it to
+    // BalancePage reads /user/balance via React Query, so we mock it to
     // reflect the post-claim balance once the bonus has been claimed.
     await page.route(
       (url) => url.pathname.endsWith("/user/balance"),
@@ -83,7 +83,8 @@ test.describe("daily bonus claim flow", () => {
       { method: "GET" },
     );
 
-    await page.goto("/");
+    // In our branch "/" is ChatPage; DailyBonusCard lives on HomePage at "/home"
+    await page.goto("/home");
 
     const claim = page.getByTestId("daily-bonus-claim");
     await expect(claim).toBeVisible();
@@ -109,7 +110,8 @@ test.describe("daily bonus claim flow", () => {
       amounts: [10, 12, 15, 20],
     });
 
-    await page.goto("/");
+    // In our branch "/" is ChatPage; DailyBonusCard lives on HomePage at "/home"
+    await page.goto("/home");
     await expect(page.getByTestId("daily-bonus-cooldown")).toBeVisible();
     await expect(page.getByTestId("daily-bonus-claim")).toHaveCount(0);
   });
@@ -126,7 +128,8 @@ test.describe("daily bonus claim flow", () => {
       amounts: [10, 12, 15, 20],
     });
 
-    await page.goto("/");
+    // In our branch "/" is ChatPage; DailyBonusCard lives on HomePage at "/home"
+    await page.goto("/home");
     await expect(page.getByTestId("daily-bonus-disabled")).toBeVisible();
   });
 });
