@@ -47,7 +47,43 @@ test.describe("daily bonus claim flow", () => {
       },
     );
 
-    await page.goto("/home");
+    // New BalancePage reads /user/balance via React Query, so we mock it to
+    // reflect the post-claim balance once the bonus has been claimed.
+    await page.route(
+      (url) => url.pathname.endsWith("/user/balance"),
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            token_balance: claimed ? 260 : 250,
+            is_premium: false,
+            premium_expires_at: null,
+            daily_bonus_available: !claimed,
+          }),
+        });
+      },
+    );
+    await mockApi(page, "/payment/packages", { items: [] }, { method: "GET" });
+    await mockApi(
+      page,
+      "/user/referral",
+      {
+        referral_code: "REF-1",
+        referrals_count: 0,
+        bonus_tokens_earned: 0,
+        referral_link: "https://t.me/test_bot?start=REF-1",
+      },
+      { method: "GET" },
+    );
+    await mockApi(
+      page,
+      "/user/transactions",
+      { items: [], total: 0, page: 1, limit: 10, has_more: false },
+      { method: "GET" },
+    );
+
+    await page.goto("/");
 
     const claim = page.getByTestId("daily-bonus-claim");
     await expect(claim).toBeVisible();
@@ -73,7 +109,7 @@ test.describe("daily bonus claim flow", () => {
       amounts: [10, 12, 15, 20],
     });
 
-    await page.goto("/home");
+    await page.goto("/");
     await expect(page.getByTestId("daily-bonus-cooldown")).toBeVisible();
     await expect(page.getByTestId("daily-bonus-claim")).toHaveCount(0);
   });
@@ -90,7 +126,7 @@ test.describe("daily bonus claim flow", () => {
       amounts: [10, 12, 15, 20],
     });
 
-    await page.goto("/home");
+    await page.goto("/");
     await expect(page.getByTestId("daily-bonus-disabled")).toBeVisible();
   });
 });

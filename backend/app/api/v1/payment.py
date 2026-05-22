@@ -1,13 +1,16 @@
 """Payment endpoints (Telegram Stars).
 
+* ``GET  /api/v1/payment/packages`` — return the token package catalog
+  (prices in Stars + token amounts); used by the Mini App balance page.
 * ``POST /api/v1/payment/create-invoice`` — Mini App requests a fresh
   Stars invoice link for a package.  Returns ``telegram_invoice_link``
   which the client opens with ``Telegram.WebApp.openInvoice``.
 * ``GET  /api/v1/payment/status/{invoice_id}`` — poll endpoint used by
   the Mini App while waiting for the ``successful_payment`` webhook.
 
-Both endpoints require ``X-Telegram-Init-Data`` (the same dependency the
-balance + history endpoints use), so the caller is always identified.
+All authenticated endpoints require ``X-Telegram-Init-Data`` (the same
+dependency the balance + history endpoints use).  The package catalog is
+public — pricing must be visible to logged-out users opening the bot.
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ from app.auth.dependencies import SessionDep, get_current_user_from_init_data
 from app.bot.client import TelegramApiError
 from app.core.logging import get_logger
 from app.models.user import User
+from app.services.payment_packages import list_packages
 from app.services.payments import (
     InvoiceNotFoundError,
     InvoicePayloadInvalidError,
@@ -56,6 +60,48 @@ class PaymentStatusResponse(BaseModel):
     created_at: datetime
     completed_at: datetime | None = None
     telegram_payment_charge_id: str | None = None
+
+
+class PackageItem(BaseModel):
+    code: str
+    title: str
+    description: str
+    tokens: int
+    stars: int
+    is_subscription: bool = False
+    subscription_days: int = 0
+
+
+class PackagesResponse(BaseModel):
+    items: list[PackageItem]
+
+
+@router.get(
+    "/packages",
+    response_model=PackagesResponse,
+    summary="List available token packages with current prices",
+)
+async def get_packages() -> PackagesResponse:
+    """Return the static package catalog used by the Mini App.
+
+    Display order matches :func:`app.services.payment_packages.list_packages`:
+    one-time bundles first, subscription plans last.  Prices and token
+    amounts come straight from the in-code catalog so the Mini App always
+    renders authoritative values.
+    """
+    items = [
+        PackageItem(
+            code=p.code,
+            title=p.title,
+            description=p.description,
+            tokens=p.tokens,
+            stars=p.stars,
+            is_subscription=p.is_subscription,
+            subscription_days=p.subscription_days,
+        )
+        for p in list_packages()
+    ]
+    return PackagesResponse(items=items)
 
 
 @router.post(

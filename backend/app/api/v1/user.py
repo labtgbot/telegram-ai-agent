@@ -2,6 +2,9 @@
 
 * ``GET /api/v1/user/balance`` — current token balance and premium status.
 * ``GET /api/v1/user/usage-history`` — paginated debit history.
+* ``GET /api/v1/user/transactions`` — paginated ledger of every token
+  movement (purchase / spend / bonus / refund / manual_bonus) with an
+  optional ``type`` filter; used by the Mini App balance page history.
 * ``GET /api/v1/user/referral`` — referral code, link and rewards summary.
 * ``GET /api/v1/user/daily-bonus`` — claim status + streak preview.
 * ``POST /api/v1/user/daily-bonus`` — credit today's bonus (idempotent per UTC day).
@@ -17,6 +20,7 @@ All endpoints require a valid ``X-Telegram-Init-Data`` header (handled by
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Annotated, Any
 
@@ -24,6 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from redis.asyncio import Redis
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import SessionDep, get_current_user_from_init_data
 from app.core.config import get_settings
@@ -206,6 +211,130 @@ async def get_usage_history(
         page=history.page,
         limit=history.limit,
         has_more=history.has_more,
+    )
+
+
+class TransactionItem(BaseModel):
+    id: int
+    transaction_type: str
+    tokens_amount: int
+    stars_amount: int | None = None
+    package_name: str | None = None
+    payment_status: str | None = None
+    payment_method: str | None = None
+    created_at: datetime
+    completed_at: datetime | None = None
+
+
+class TransactionsResponse(BaseModel):
+    items: list[TransactionItem]
+    total: int
+    page: int
+    limit: int
+    has_more: bool
+
+
+_ALLOWED_TX_TYPES: frozenset[str] = frozenset(
+    {"purchase", "spend", "bonus", "refund", "manual_bonus"}
+)
+
+
+@dataclass(frozen=True)
+class _TransactionsPage:
+    """Internal page wrapper so the endpoint can be unit-tested via a stub."""
+
+    items: list[Transaction]
+    total: int
+    page: int
+    limit: int
+
+
+async def _list_transactions(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    page: int,
+    limit: int,
+    transaction_type: str | None,
+) -> _TransactionsPage:
+    """Run the transactions query.  Extracted from the route handler so the
+    Mini App test suite can swap it with an in-memory fake without needing
+    a real database."""
+    offset = (page - 1) * limit
+    where = [Transaction.user_id == user_id]
+    if transaction_type and transaction_type in _ALLOWED_TX_TYPES:
+        where.append(Transaction.transaction_type == transaction_type)
+
+    total_stmt = select(func.count()).select_from(Transaction).where(*where)
+    total = int((await session.execute(total_stmt)).scalar_one())
+
+    items_stmt = (
+        select(Transaction)
+        .where(*where)
+        .order_by(Transaction.created_at.desc(), Transaction.id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    rows = list((await session.execute(items_stmt)).scalars().all())
+    return _TransactionsPage(items=rows, total=total, page=page, limit=limit)
+
+
+@router.get(
+    "/transactions",
+    response_model=TransactionsResponse,
+    summary="Paginated transaction ledger (purchases, bonuses, spends, refunds)",
+)
+async def get_transactions(
+    session: SessionDep,
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+    page: Annotated[int, Query(ge=1, le=10_000)] = 1,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    transaction_type: Annotated[
+        str | None,
+        Query(
+            alias="type",
+            description=(
+                "Filter by transaction type. One of: "
+                "purchase, spend, bonus, refund, manual_bonus."
+            ),
+        ),
+    ] = None,
+) -> TransactionsResponse:
+    """Return a paginated slice of the user's transactions ledger.
+
+    The Mini App balance page uses this to render purchase history and
+    bonus / refund timelines.  ``type`` is optional and accepts any of
+    the values listed in :data:`_ALLOWED_TX_TYPES`; unknown values are
+    silently ignored so the UI may always submit its currently selected
+    filter without first validating against the catalog.
+    """
+    result = await _list_transactions(
+        session,
+        user_id=user.id,
+        page=page,
+        limit=limit,
+        transaction_type=transaction_type,
+    )
+    items = [
+        TransactionItem(
+            id=row.id,
+            transaction_type=row.transaction_type,
+            tokens_amount=row.tokens_amount,
+            stars_amount=row.stars_amount,
+            package_name=row.package_name,
+            payment_status=row.payment_status,
+            payment_method=row.payment_method,
+            created_at=row.created_at,
+            completed_at=row.completed_at,
+        )
+        for row in result.items
+    ]
+    return TransactionsResponse(
+        items=items,
+        total=result.total,
+        page=result.page,
+        limit=result.limit,
+        has_more=(result.page * result.limit) < result.total,
     )
 
 
