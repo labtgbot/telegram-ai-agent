@@ -44,14 +44,11 @@ export function UsageChart({ data }: UsageChartProps) {
     return <p className="text-sm text-slate-500">No usage yet.</p>;
   }
 
-  let cursor = 0;
-  const arcs = data.map((slice) => {
-    const start = cursor;
+  const arcs = data.reduce<{ slice: ServiceUsageSlice; start: number; end: number }[]>((segments, slice) => {
+    const start = segments.at(-1)?.end ?? 0;
     const angle = (slice.tokens / total) * Math.PI * 2;
-    const end = cursor + angle;
-    cursor = end;
-    return { slice, start, end };
-  });
+    return [...segments, { slice, start, end: start + angle }];
+  }, []);
 
   return (
     <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center sm:gap-6">

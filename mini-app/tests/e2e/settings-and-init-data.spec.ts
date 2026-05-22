@@ -7,7 +7,7 @@ test.describe("settings flow and init-data propagation", () => {
     page,
   }) => {
     const initData = "mock-init-data-xyz";
-    await installTelegramMock(page, {
+    const telegram = await installTelegramMock(page, {
       initData,
       user: { id: 42, first_name: "Linus", username: "linus", language_code: "en" },
     });
@@ -25,7 +25,7 @@ test.describe("settings flow and init-data propagation", () => {
       },
     );
 
-    await page.goto("/settings");
+    await telegram.goto("/settings");
 
     await page.getByLabel("Email").fill("linus@example.com");
     await page.getByRole("button", { name: "Request export" }).click();
@@ -35,7 +35,7 @@ test.describe("settings flow and init-data propagation", () => {
   });
 
   test("reflects the Telegram color scheme in the header", async ({ page }) => {
-    await installTelegramMock(page, { colorScheme: "dark" });
+    const telegram = await installTelegramMock(page, { colorScheme: "dark" });
     await mockApi(page, "/user/daily-bonus", {
       available: false,
       enabled: false,
@@ -45,7 +45,7 @@ test.describe("settings flow and init-data propagation", () => {
       next_available_at: "2026-05-17T00:00:00+00:00",
       amounts: [],
     });
-    await page.goto("/");
+    await telegram.goto();
     await expect(page.getByTestId("active-scheme")).toHaveText("dark");
   });
 });

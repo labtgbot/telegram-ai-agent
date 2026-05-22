@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,11 +35,6 @@ export function UsersFilters({
   const router = useRouter();
   const searchParams = useSearchParams();
   const [search, setSearch] = useState(initialSearch);
-
-  // Keep the input in sync if the user navigates back/forward.
-  useEffect(() => {
-    setSearch(initialSearch);
-  }, [initialSearch]);
 
   const navigateWith = useCallback(
     (mutate: (params: URLSearchParams) => void) => {
@@ -90,6 +85,7 @@ export function UsersFilters({
     <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
       <form onSubmit={submitSearch} className="flex flex-1 items-center gap-2 sm:max-w-md">
         <Input
+          key={initialSearch}
           name="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
