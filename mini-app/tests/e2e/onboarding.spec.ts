@@ -39,7 +39,7 @@ test.describe("onboarding via Telegram WebApp mock", () => {
       totp_enabled: false,
     });
 
-    await telegram.goto();
+    await telegram.goto("/home");
 
     await expect(page.getByTestId("active-scheme")).toHaveText(/light|dark/);
     await expect(page.getByText(/Hi Ada/)).toBeVisible();

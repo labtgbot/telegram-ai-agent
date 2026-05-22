@@ -3,6 +3,7 @@ import type { TranslationDict } from "@/i18n/locales/en";
 export const ru: TranslationDict = {
   nav: {
     home: "Главная",
+    chat: "Чат",
     balance: "Баланс",
     profile: "Профиль",
     history: "История",
