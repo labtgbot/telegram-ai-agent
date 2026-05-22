@@ -3,7 +3,7 @@ import { NavLink, Outlet } from "react-router-dom";
 import { useThemeStore } from "@/store/useThemeStore";
 
 const NAV_ITEMS: Array<{ to: string; label: string }> = [
-  { to: "/", label: "Home" },
+  { to: "/", label: "Chat" },
   { to: "/balance", label: "Balance" },
   { to: "/settings", label: "Settings" },
 ];
