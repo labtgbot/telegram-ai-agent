@@ -21,7 +21,7 @@ function makeClient(fetchImpl: ReturnType<typeof vi.fn>): ApiClient {
   return new ApiClient({
     baseUrl: "https://api.example.com/api/v1",
     getInitData: () => "tg",
-    fetchImpl,
+    fetchImpl: fetchImpl as unknown as typeof fetch,
   });
 }
 

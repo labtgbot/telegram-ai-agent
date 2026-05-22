@@ -19,6 +19,13 @@ const THEME_VARS: Array<[keyof TelegramThemeParams, string]> = [
   ["subtitle_text_color", "--tg-color-subtitle-text"],
 ];
 
+export function getTelegramWebApp(): typeof WebApp {
+  const telegramWindow = window as Window & {
+    Telegram?: { WebApp?: typeof WebApp };
+  };
+  return telegramWindow.Telegram?.WebApp ?? WebApp;
+}
+
 /** Apply Telegram theme params as CSS variables on `:root`. */
 export function applyTelegramTheme(
   params: TelegramThemeParams,
@@ -48,14 +55,16 @@ export function initTelegramWebApp(): {
   themeParams: TelegramThemeParams;
 } {
   try {
-    WebApp.ready();
-    WebApp.expand();
+    const webApp = getTelegramWebApp();
+    webApp.ready();
+    webApp.expand();
   } catch {
     /* SDK is best-effort outside of Telegram. */
   }
 
-  const scheme: TelegramColorScheme = WebApp.colorScheme === "dark" ? "dark" : "light";
-  const themeParams = (WebApp.themeParams ?? {}) as TelegramThemeParams;
+  const webApp = getTelegramWebApp();
+  const scheme: TelegramColorScheme = webApp.colorScheme === "dark" ? "dark" : "light";
+  const themeParams = (webApp.themeParams ?? {}) as TelegramThemeParams;
   applyTelegramTheme(themeParams, scheme);
   return { scheme, themeParams };
 }
@@ -63,7 +72,7 @@ export function initTelegramWebApp(): {
 /** Returns Telegram WebApp `initData` for backend auth, or empty string. */
 export function getInitData(): string {
   try {
-    return WebApp.initData ?? "";
+    return getTelegramWebApp().initData ?? "";
   } catch {
     return "";
   }
