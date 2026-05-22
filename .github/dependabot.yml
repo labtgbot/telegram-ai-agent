@@ -11,9 +11,6 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(ci)"
-    labels:
-      - dependencies
-      - github-actions
 
   - package-ecosystem: pip
     directory: "/backend"
@@ -26,9 +23,6 @@ updates:
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
-    labels:
-      - dependencies
-      - backend
     groups:
       backend-minor-patch:
         update-types:
@@ -46,9 +40,6 @@ updates:
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
-    labels:
-      - dependencies
-      - mini-app
     groups:
       mini-app-minor-patch:
         update-types:
@@ -66,9 +57,6 @@ updates:
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
-    labels:
-      - dependencies
-      - admin-dashboard
     groups:
       admin-minor-patch:
         update-types:
@@ -85,6 +73,3 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore(docker)"
-    labels:
-      - dependencies
-      - docker
