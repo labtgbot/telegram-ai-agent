@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { useThemeStore } from "@/store/useThemeStore";
 import { useUserStore } from "@/store/useUserStore";
 import type { User } from "@/store/useUserStore";
-import { initTelegramWebApp, WebApp } from "@/services/telegram";
+import { getTelegramWebApp, initTelegramWebApp } from "@/services/telegram";
 import type { TelegramColorScheme, TelegramInitUser, TelegramThemeParams } from "@/types/telegram";
 
 /** Build a `User` shape from Telegram's `initDataUnsafe.user` for instant UI. */
@@ -41,35 +41,47 @@ export function useTelegramBootstrap(): void {
   const setUser = useUserStore((s) => s.setUser);
 
   useEffect(() => {
-    const { scheme, themeParams } = initTelegramWebApp();
-    setTheme(scheme, themeParams);
+    const syncTelegram = (): void => {
+      const { scheme, themeParams } = initTelegramWebApp();
+      setTheme(scheme, themeParams);
 
-    try {
-      const tgUser = (WebApp.initDataUnsafe?.user ?? null) as TelegramInitUser | null;
-      if (tgUser) {
-        setUser(userFromTelegram(tgUser));
+      try {
+        const webApp = getTelegramWebApp();
+        const tgUser = (webApp.initDataUnsafe?.user ?? null) as TelegramInitUser | null;
+        if (tgUser) {
+          setUser(userFromTelegram(tgUser));
+        }
+      } catch {
+        /* outside of Telegram: ignore */
       }
-    } catch {
-      /* outside of Telegram: ignore */
-    }
+    };
+
+    syncTelegram();
 
     const onThemeChanged = (): void => {
-      const next: TelegramColorScheme = WebApp.colorScheme === "dark" ? "dark" : "light";
-      const params = (WebApp.themeParams ?? {}) as TelegramThemeParams;
+      const webApp = getTelegramWebApp();
+      const next: TelegramColorScheme = webApp.colorScheme === "dark" ? "dark" : "light";
+      const params = (webApp.themeParams ?? {}) as TelegramThemeParams;
       setTheme(next, params);
     };
 
     try {
-      WebApp.onEvent("themeChanged", onThemeChanged);
+      getTelegramWebApp().onEvent("themeChanged", onThemeChanged);
     } catch {
       /* outside of Telegram: ignore */
+    }
+    if (import.meta.env.DEV) {
+      window.addEventListener("telegramMockChanged", syncTelegram);
     }
 
     return () => {
       try {
-        WebApp.offEvent("themeChanged", onThemeChanged);
+        getTelegramWebApp().offEvent("themeChanged", onThemeChanged);
       } catch {
         /* ignore */
+      }
+      if (import.meta.env.DEV) {
+        window.removeEventListener("telegramMockChanged", syncTelegram);
       }
     };
   }, [setTheme, setUser]);

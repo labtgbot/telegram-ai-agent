@@ -1,6 +1,7 @@
 const _en = {
   nav: {
     home: "Home",
+    chat: "Chat",
     balance: "Balance",
     profile: "Profile",
     history: "History",

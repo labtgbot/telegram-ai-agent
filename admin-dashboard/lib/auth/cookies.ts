@@ -16,8 +16,8 @@ const FOURTEEN_DAYS = 14 * 24 * 60 * 60;
  * server components / middleware can read them. The access cookie expires
  * with the JWT; the refresh cookie lives long enough to cover an idle admin.
  */
-export function persistTokens(pair: TokenPair): void {
-  const store = cookies();
+export async function persistTokens(pair: TokenPair): Promise<void> {
+  const store = await cookies();
   const secure = process.env.NODE_ENV === "production";
   store.set(COOKIE_NAMES.access, pair.access_token, {
     httpOnly: true,
@@ -35,16 +35,16 @@ export function persistTokens(pair: TokenPair): void {
   });
 }
 
-export function clearTokens(): void {
-  const store = cookies();
+export async function clearTokens(): Promise<void> {
+  const store = await cookies();
   store.delete(COOKIE_NAMES.access);
   store.delete(COOKIE_NAMES.refresh);
 }
 
-export function readAccessToken(): string | undefined {
-  return cookies().get(COOKIE_NAMES.access)?.value;
+export async function readAccessToken(): Promise<string | undefined> {
+  return (await cookies()).get(COOKIE_NAMES.access)?.value;
 }
 
-export function readRefreshToken(): string | undefined {
-  return cookies().get(COOKIE_NAMES.refresh)?.value;
+export async function readRefreshToken(): Promise<string | undefined> {
+  return (await cookies()).get(COOKIE_NAMES.refresh)?.value;
 }

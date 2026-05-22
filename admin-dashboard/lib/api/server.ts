@@ -15,7 +15,7 @@ export function createServerApiClient(): ApiClient {
     baseUrl: serverEnv().apiBaseUrl,
     getAccessToken: () => readAccessToken(),
     refreshAccessToken: async () => {
-      const refresh = readRefreshToken();
+      const refresh = await readRefreshToken();
       if (!refresh) return undefined;
       try {
         const response = await fetch(`${serverEnv().apiBaseUrl}/auth/admin/refresh`, {
@@ -24,7 +24,7 @@ export function createServerApiClient(): ApiClient {
           body: JSON.stringify({ refresh_token: refresh }),
         });
         if (!response.ok) {
-          clearTokens();
+          await clearTokens();
           return undefined;
         }
         const payload = (await response.json()) as {
@@ -32,15 +32,15 @@ export function createServerApiClient(): ApiClient {
           refresh_token: string;
           expires_in: number;
         };
-        persistTokens(payload);
+        await persistTokens(payload);
         return payload.access_token;
       } catch {
-        clearTokens();
+        await clearTokens();
         return undefined;
       }
     },
-    onAuthLost: (status) => {
-      if (status === 401) clearTokens();
+    onAuthLost: async (status) => {
+      if (status === 401) await clearTokens();
     },
   });
 }

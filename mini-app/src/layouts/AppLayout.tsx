@@ -5,7 +5,7 @@ import type { TranslationKey } from "@/i18n";
 import { useThemeStore } from "@/store/useThemeStore";
 
 const NAV_ITEMS: ReadonlyArray<{ to: string; key: TranslationKey }> = [
-  { to: "/", key: "nav.home" },
+  { to: "/", key: "nav.chat" },
   { to: "/balance", key: "nav.balance" },
   { to: "/profile", key: "nav.profile" },
   { to: "/history", key: "nav.history" },

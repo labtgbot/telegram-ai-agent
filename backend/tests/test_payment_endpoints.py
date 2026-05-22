@@ -6,6 +6,7 @@ same pattern as ``test_user_endpoints.py``.
 
 What we verify:
 
+* ``GET  /payment/packages`` returns the static catalog (4 packages).
 * ``POST /payment/create-invoice`` returns the link the service produced.
 * Missing/tampered init data → ``401``.
 * Unknown package → ``404 package_not_found``.
@@ -249,6 +250,53 @@ def _build_init_data(telegram_id: int = 42) -> str:
 
 async def _client(app: Any) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+# --------------------------------------------------------- GET /payment/packages
+
+
+@pytest.mark.asyncio
+async def test_get_packages_returns_full_catalog(build_app) -> None:
+    """The Mini App relies on this endpoint to render package cards
+    without baking prices into the client.  All four packages must be
+    present, with their stars/tokens values matching the in-code catalog,
+    and one-time packages must precede the subscription plan.
+    """
+    async with await _client(build_app) as c:
+        resp = await c.get("/api/v1/payment/packages")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    items = body["items"]
+    codes = [p["code"] for p in items]
+    assert codes == ["starter", "basic", "premium", "pro_monthly"]
+
+    by_code = {p["code"]: p for p in items}
+    assert by_code["starter"]["tokens"] == 500
+    assert by_code["starter"]["stars"] == 250
+    assert by_code["starter"]["is_subscription"] is False
+    assert by_code["starter"]["subscription_days"] == 0
+
+    assert by_code["basic"]["tokens"] == 1200
+    assert by_code["basic"]["stars"] == 500
+
+    assert by_code["premium"]["tokens"] == 2000
+    assert by_code["premium"]["stars"] == 750
+
+    pro = by_code["pro_monthly"]
+    assert pro["tokens"] == 2000
+    assert pro["stars"] == 500
+    assert pro["is_subscription"] is True
+    assert pro["subscription_days"] == 30
+
+
+@pytest.mark.asyncio
+async def test_get_packages_is_public(build_app) -> None:
+    """No init-data header is required — the catalog is public so an
+    unauthenticated bot opener can still see pricing."""
+    async with await _client(build_app) as c:
+        resp = await c.get("/api/v1/payment/packages")
+    assert resp.status_code == 200
+    assert "items" in resp.json()
 
 
 # ----------------------------------------------- POST /payment/create-invoice

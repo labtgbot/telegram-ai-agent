@@ -10,7 +10,7 @@ export interface ApiClientOptions {
    */
   refreshAccessToken?: () => Promise<string | undefined>;
   /** Invoked when the session is irrecoverable (401 after refresh, or 403). */
-  onAuthLost?: (status: 401 | 403) => void;
+  onAuthLost?: (status: 401 | 403) => void | Promise<void>;
   fetchImpl?: typeof fetch;
 }
 
@@ -88,15 +88,15 @@ export class ApiClient {
       if (next) {
         return this.executeWithAuth<T>(path, options, true);
       }
-      this.opts.onAuthLost?.(401);
+      await this.opts.onAuthLost?.(401);
       throw await this.toApiError(response);
     }
     if (response.status === 401) {
-      this.opts.onAuthLost?.(401);
+      await this.opts.onAuthLost?.(401);
       throw await this.toApiError(response);
     }
     if (response.status === 403) {
-      this.opts.onAuthLost?.(403);
+      await this.opts.onAuthLost?.(403);
       throw await this.toApiError(response);
     }
     if (!response.ok) {
