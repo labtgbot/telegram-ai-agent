@@ -37,17 +37,28 @@ export default defineConfig({
     reportCompressedSize: true,
     rollupOptions: {
       output: {
-        manualChunks: {
+        manualChunks(id) {
           // React + ReactDOM live forever in their own chunk — the
           // browser cache amortises them across releases that only
           // touch app code.
-          "vendor-react": ["react", "react-dom"],
-          "vendor-router": ["react-router-dom"],
+          if (id.includes("/node_modules/react/") || id.includes("/node_modules/react-dom/")) {
+            return "vendor-react";
+          }
+          if (id.includes("/node_modules/react-router-dom/")) {
+            return "vendor-router";
+          }
           // ``@twa-dev/sdk`` is heavy and only used to wire Telegram
           // theme / haptics — splitting it keeps the entry script lean.
-          "vendor-telegram": ["@twa-dev/sdk"],
-          "vendor-sentry": ["@sentry/react"],
-          "vendor-state": ["zustand"],
+          if (id.includes("/node_modules/@twa-dev/sdk/")) {
+            return "vendor-telegram";
+          }
+          if (id.includes("/node_modules/@sentry/react/")) {
+            return "vendor-sentry";
+          }
+          if (id.includes("/node_modules/zustand/")) {
+            return "vendor-state";
+          }
+          return undefined;
         },
       },
     },
