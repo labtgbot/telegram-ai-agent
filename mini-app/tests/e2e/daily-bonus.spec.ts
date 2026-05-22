@@ -47,7 +47,7 @@ test.describe("daily bonus claim flow", () => {
       },
     );
 
-    await page.goto("/");
+    await page.goto("/home");
 
     const claim = page.getByTestId("daily-bonus-claim");
     await expect(claim).toBeVisible();
@@ -73,7 +73,7 @@ test.describe("daily bonus claim flow", () => {
       amounts: [10, 12, 15, 20],
     });
 
-    await page.goto("/");
+    await page.goto("/home");
     await expect(page.getByTestId("daily-bonus-cooldown")).toBeVisible();
     await expect(page.getByTestId("daily-bonus-claim")).toHaveCount(0);
   });
@@ -90,7 +90,7 @@ test.describe("daily bonus claim flow", () => {
       amounts: [10, 12, 15, 20],
     });
 
-    await page.goto("/");
+    await page.goto("/home");
     await expect(page.getByTestId("daily-bonus-disabled")).toBeVisible();
   });
 });
