@@ -146,6 +146,25 @@ jobs:
       - name: Run backup helper unit tests
         run: bash deploy/backup/tests/run-tests.sh
 
+  shared-hosting-installer-test:
+    name: Shared hosting installer — PHP smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up PHP 8.1
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.1"
+          extensions: json, curl, mbstring, openssl, pdo, pdo_mysql, session
+          coverage: none
+
+      - name: PHP syntax check
+        run: php -l deploy/shared-hosting/install.php
+
+      - name: Run installer smoke test
+        run: php deploy/shared-hosting/tests/installer_smoke.php
+
   compose-prod-validate:
     name: docker compose.prod.yml — parse
     runs-on: ubuntu-latest
