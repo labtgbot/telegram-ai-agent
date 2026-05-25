@@ -104,4 +104,4 @@ Workflow, code style, commit conventions — в [`CONTRIBUTING.md`](CONTRIBUTING
 
 ## 📄 License
 
-TBD (будет определена перед публичным релизом).
+Copyright (c) 2026 Антон Порошин. Все права защищены.
