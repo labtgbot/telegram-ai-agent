@@ -12,6 +12,8 @@
 ARG PYTHON_VERSION=3.11
 FROM python:${PYTHON_VERSION}-slim AS base
 
+ARG APT_SECURITY_REFRESH=manual
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -21,7 +23,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # after the upstream `python:slim` tag was built — without it the image
 # ships HIGH-severity CVEs in libsystemd0/libcap2/libc6 that Debian has
 # already patched (see audit-report.md § F-008).
-RUN apt-get update \
+RUN echo "APT security refresh: ${APT_SECURITY_REFRESH}" \
+    && apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends \
         curl \
