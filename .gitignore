@@ -54,6 +54,7 @@ Thumbs.db
 storage/
 uploads/
 media/
+deploy/shared-hosting/generated/
 
 # Playwright MCP scratch artifacts
 .playwright-mcp/

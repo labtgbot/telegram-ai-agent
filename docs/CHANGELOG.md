@@ -46,6 +46,9 @@ empty section silently drops notes from the release page.
   definitions.
 - Production deploy runbook (`docs/PRODUCTION_DEPLOY.md`) covering
   pre-launch gates, the helm-driven cutover and the rollback path.
+- Shared hosting PHP/MySQL installer (`deploy/shared-hosting/install.php`)
+  with env generation, Telegram webhook assets, BotFather checklist,
+  redacted MySQL metadata storage and smoke-test coverage.
 
 ### Changed
 
