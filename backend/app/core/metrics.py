@@ -1,10 +1,9 @@
 """Prometheus metrics for the FastAPI backend.
 
-The HTTP-level metrics (requests total, latency histogram, in-flight requests,
-exceptions) are emitted by a lightweight ASGI middleware in this module. This
-keeps the dependency graph compatible with patched Starlette releases while
-still exposing the standard Prometheus series used by dashboards. This module
-also adds the *business* metrics referenced in the Phase 4 SLO catalogue:
+HTTP-level metrics (requests total, latency histogram, in-flight requests) are
+emitted by a small local middleware so the runtime does not depend on a
+Starlette-version-pinned instrumentation wrapper. This module also adds the
+*business* metrics referenced in the Phase 4 SLO catalogue:
 
 * ``tokens_sold_total`` — counter of tokens credited by completed purchases.
 * ``tokens_spent_total`` — counter of tokens debited by spends, labelled by service.
@@ -114,20 +113,27 @@ payment_events_total: Counter = Counter(
 
 http_requests_total: Counter = Counter(
     name="http_requests_total",
-    documentation="Total HTTP requests processed by the backend.",
-    labelnames=("handler", "method", "status"),
+    documentation="HTTP requests completed by method, route handler and status class.",
+    labelnames=("method", "handler", "status"),
+    namespace=NAMESPACE,
+    registry=REGISTRY,
 )
 
 http_request_duration_seconds: Histogram = Histogram(
     name="http_request_duration_seconds",
-    documentation="HTTP request latency in seconds.",
-    labelnames=("handler", "method", "status"),
+    documentation="HTTP request latency in seconds by method and route handler.",
+    labelnames=("method", "handler"),
+    namespace=NAMESPACE,
+    registry=REGISTRY,
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
 )
 
-tgai_http_requests_in_progress: Gauge = Gauge(
-    name="tgai_http_requests_in_progress",
-    documentation="HTTP requests currently being processed by the backend.",
-    labelnames=("handler", "method"),
+http_requests_in_progress: Gauge = Gauge(
+    name="http_requests_in_progress",
+    documentation="HTTP requests currently being handled.",
+    labelnames=("method", "handler"),
+    namespace=NAMESPACE,
+    registry=REGISTRY,
 )
 
 
@@ -293,10 +299,24 @@ class ActiveUserMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class HttpMetricsMiddleware(BaseHTTPMiddleware):
-    """Emit Prometheus HTTP counters without pinning Starlette below 1.0."""
+def _route_handler(request: Request) -> str:
+    route = request.scope.get("route")
+    path = getattr(route, "path", None)
+    if path:
+        return str(path)
+    return request.url.path
 
-    def __init__(self, app: Any, *, excluded_paths: set[str]) -> None:
+
+def _status_group(status_code: int) -> str:
+    if status_code < 100:
+        return "unknown"
+    return f"{status_code // 100}xx"
+
+
+class HttpMetricsMiddleware(BaseHTTPMiddleware):
+    """Record request count, latency and in-flight gauge for HTTP traffic."""
+
+    def __init__(self, app: Any, excluded_paths: set[str]) -> None:
         super().__init__(app)
         self._excluded_paths = excluded_paths
 
@@ -305,37 +325,32 @@ class HttpMetricsMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: Callable[[Request], Any],
     ) -> Response:
-        path = request.url.path
-        if path in self._excluded_paths:
+        if request.url.path in self._excluded_paths:
             return await call_next(request)
 
         method = request.method
-        handler = path
-        tgai_http_requests_in_progress.labels(handler=handler, method=method).inc()
-        started_at = time.perf_counter()
-        status_code = "500"
-
+        handler = request.url.path
+        in_progress = http_requests_in_progress.labels(method=method, handler=handler)
+        in_progress.inc()
+        start = time.perf_counter()
+        status = "5xx"
         try:
             response = await call_next(request)
-            status_code = str(response.status_code)
+            handler = _route_handler(request)
+            status = _status_group(response.status_code)
             return response
-        except Exception:
-            http_requests_total.labels(handler=handler, method=method, status=status_code).inc()
-            http_request_duration_seconds.labels(
-                handler=handler,
-                method=method,
-                status=status_code,
-            ).observe(time.perf_counter() - started_at)
-            raise
         finally:
-            tgai_http_requests_in_progress.labels(handler=handler, method=method).dec()
-            if status_code != "500":
-                http_requests_total.labels(handler=handler, method=method, status=status_code).inc()
-                http_request_duration_seconds.labels(
-                    handler=handler,
+            duration = max(time.perf_counter() - start, 0.0)
+            with suppress(Exception):
+                in_progress.dec()
+                http_request_duration_seconds.labels(method=method, handler=handler).observe(
+                    duration
+                )
+                http_requests_total.labels(
                     method=method,
-                    status=status_code,
-                ).observe(time.perf_counter() - started_at)
+                    handler=handler,
+                    status=status,
+                ).inc()
 
 
 def setup_metrics(app: FastAPI, settings: Settings | None = None) -> None:
@@ -352,16 +367,14 @@ def setup_metrics(app: FastAPI, settings: Settings | None = None) -> None:
     if getattr(app.state, "metrics_installed", False):
         return
 
-    app.add_middleware(
-        HttpMetricsMiddleware,
-        excluded_paths={cfg.metrics_path, "/health/live", "/api/v1/health/live"},
-    )
+    excluded_paths = {cfg.metrics_path, "/health/live", "/api/v1/health/live"}
 
     @app.get(cfg.metrics_path, include_in_schema=False, tags=["monitoring"])
     async def metrics_endpoint() -> Response:
-        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+        return Response(content=generate_latest(REGISTRY), media_type=CONTENT_TYPE_LATEST)
 
     tracker = get_active_user_tracker(cfg)
+    app.add_middleware(HttpMetricsMiddleware, excluded_paths=excluded_paths)
     app.add_middleware(ActiveUserMiddleware, tracker=tracker)
     app.state.metrics_installed = True
     logger.info("metrics.enabled", endpoint=cfg.metrics_path)
@@ -374,8 +387,6 @@ __all__ = [
     "REGISTRY",
     "active_users",
     "get_active_user_tracker",
-    "http_request_duration_seconds",
-    "http_requests_total",
     "observe_payment_event",
     "observe_purchase",
     "observe_spend",
@@ -384,7 +395,6 @@ __all__ = [
     "revenue_stars_total",
     "revenue_usd_total",
     "setup_metrics",
-    "tgai_http_requests_in_progress",
     "tokens_sold_total",
     "tokens_spent_total",
 ]

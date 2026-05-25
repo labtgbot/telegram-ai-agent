@@ -9,6 +9,7 @@ readme = "README.md"
 
 dependencies = [
     "fastapi>=0.110,<1",
+    "starlette>=1.0.1,<2",
     "uvicorn[standard]>=0.29,<1",
     "structlog>=24.1,<26",
     "sqlalchemy[asyncio]>=2.0.30,<2.1",
