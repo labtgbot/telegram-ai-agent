@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useRef } from "react";
 
 import { Button } from "@/components/Button";
@@ -40,12 +41,11 @@ export function ChatComposer({
   onAction,
   onAttachmentAdded,
   onAttachmentRemoved,
-}: ChatComposerProps): JSX.Element {
+}: ChatComposerProps): ReactElement {
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
 
-  const canSubmit =
-    !isSending && (draft.trim().length > 0 || pendingAttachments.length > 0);
+  const canSubmit = !isSending && (draft.trim().length > 0 || pendingAttachments.length > 0);
 
   return (
     <div className="border-t border-tg-separator bg-tg-header px-3 pb-3 pt-2">
@@ -64,23 +64,15 @@ export function ChatComposer({
               {ACTION_ICON[action]}
             </span>
             <span className="font-medium">{ACTION_LABEL[action]}</span>
-            <span className="text-[10px] text-tg-hint">
-              {ACTION_COST[action]}t
-            </span>
+            <span className="text-[10px] text-tg-hint">{ACTION_COST[action]}t</span>
           </button>
         ))}
       </div>
 
       {pendingAttachments.length > 0 ? (
-        <ul
-          className="mb-2 flex gap-2 overflow-x-auto"
-          data-testid="pending-attachments"
-        >
+        <ul className="mb-2 flex gap-2 overflow-x-auto" data-testid="pending-attachments">
           {pendingAttachments.map((att) => (
-            <li
-              key={att.id}
-              className="relative shrink-0 rounded-tg bg-tg-secondary-bg p-1"
-            >
+            <li key={att.id} className="relative shrink-0 rounded-tg bg-tg-secondary-bg p-1">
               {att.kind === "image" ? (
                 <img
                   src={att.previewUrl}
@@ -189,9 +181,7 @@ async function handleFileSelected(
 ): Promise<void> {
   const base64 = await readFileAsBase64(file);
   const previewUrl =
-    typeof URL !== "undefined" && "createObjectURL" in URL
-      ? URL.createObjectURL(file)
-      : "";
+    typeof URL !== "undefined" && "createObjectURL" in URL ? URL.createObjectURL(file) : "";
   onAdded({
     id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     kind,

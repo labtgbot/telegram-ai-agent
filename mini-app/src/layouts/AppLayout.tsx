@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 
 import { useTranslation } from "@/i18n/useTranslation";
@@ -13,7 +14,7 @@ const NAV_ITEMS: ReadonlyArray<{ to: string; key: TranslationKey }> = [
   { to: "/settings", key: "nav.settings" },
 ];
 
-export function AppLayout(): JSX.Element {
+export function AppLayout(): ReactElement {
   const scheme = useThemeStore((s) => s.scheme);
   const { t } = useTranslation();
 

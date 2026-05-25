@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { Card } from "@/components/Card";
 
 interface BonusListProps {
@@ -45,7 +46,7 @@ const STATE_STYLES: Record<BonusRow["state"], string> = {
   locked: "bg-tg-secondary-bg text-tg-hint",
 };
 
-export function BonusList({ dailyAvailable, hasReferral }: BonusListProps): JSX.Element {
+export function BonusList({ dailyAvailable, hasReferral }: BonusListProps): ReactElement {
   const rows = buildRows(Boolean(dailyAvailable), hasReferral);
   return (
     <Card title="Бонусы">

@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 interface SwitchProps {
   checked: boolean;
   onChange: (next: boolean) => void;
@@ -14,7 +15,7 @@ export function Switch({
   description,
   disabled = false,
   id,
-}: SwitchProps): JSX.Element {
+}: SwitchProps): ReactElement {
   const inputId = id ?? `switch-${label.replace(/\s+/g, "-").toLowerCase()}`;
   return (
     <label

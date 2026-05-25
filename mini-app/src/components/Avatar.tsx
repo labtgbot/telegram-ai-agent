@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 interface AvatarProps {
   src?: string | null;
   name?: string | null;
@@ -11,7 +12,7 @@ function initialsOf(name: string | null | undefined): string {
   return parts.map((part) => part[0]?.toUpperCase() ?? "").join("") || "?";
 }
 
-export function Avatar({ src, name, alt, size = 64 }: AvatarProps): JSX.Element {
+export function Avatar({ src, name, alt, size = 64 }: AvatarProps): ReactElement {
   const style = { width: size, height: size, fontSize: size / 2.5 };
   if (src) {
     return (

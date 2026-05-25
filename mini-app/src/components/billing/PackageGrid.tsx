@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { Card } from "@/components/Card";
 import { PackageCard } from "@/components/billing/PackageCard";
 import type { PackageItem } from "@/types/billing";
@@ -18,7 +19,7 @@ export function PackageGrid({
   error,
   buyingCode,
   onBuy,
-}: PackageGridProps): JSX.Element {
+}: PackageGridProps): ReactElement {
   if (error) {
     return (
       <Card title="Пакеты">
@@ -49,10 +50,7 @@ export function PackageGrid({
 
   return (
     <Card title="Пакеты">
-      <div
-        className="grid gap-3 sm:grid-cols-2"
-        data-testid="package-grid"
-      >
+      <div className="grid gap-3 sm:grid-cols-2" data-testid="package-grid">
         {packages.map((pkg) => (
           <PackageCard
             key={pkg.code}

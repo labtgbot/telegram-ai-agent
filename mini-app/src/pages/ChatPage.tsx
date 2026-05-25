@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useCallback, useMemo, useRef } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
@@ -28,7 +29,7 @@ function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function ChatPage(): JSX.Element {
+export function ChatPage(): ReactElement {
   const user = useUserStore((s) => s.user);
   const threadId = useChatStore((s) => s.threadId);
   const mode = useChatStore((s) => s.mode);
@@ -54,8 +55,7 @@ export function ChatPage(): JSX.Element {
   const attachmentCost = useMemo(
     () =>
       pendingAttachments.reduce(
-        (sum, att) =>
-          sum + (att.kind === "image" ? ACTION_COST.image : ACTION_COST.document),
+        (sum, att) => sum + (att.kind === "image" ? ACTION_COST.image : ACTION_COST.document),
         0,
       ),
     [pendingAttachments],
@@ -129,9 +129,7 @@ export function ChatPage(): JSX.Element {
     }
 
     const effectivePrompt =
-      documentContexts.length > 0
-        ? `${prompt}\n\n---\n${documentContexts.join("\n\n")}`
-        : prompt;
+      documentContexts.length > 0 ? `${prompt}\n\n---\n${documentContexts.join("\n\n")}` : prompt;
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -145,8 +143,7 @@ export function ChatPage(): JSX.Element {
           signal: controller.signal,
         },
         {
-          onStart: () =>
-            patchMessage(assistantId, { status: "streaming" }),
+          onStart: () => patchMessage(assistantId, { status: "streaming" }),
           onDelta: (delta) => appendAssistantDelta(assistantId, delta),
           onFinal: (final) =>
             finalizeMessage(assistantId, {
@@ -274,17 +271,16 @@ export function ChatPage(): JSX.Element {
                 job.status === "succeeded" && job.result_url
                   ? `Video ready (job #${job.job_id}).`
                   : `Video job #${job.job_id} submitted (status: ${job.status}). Poll back for the result.`,
-              attachments:
-                job.result_url
-                  ? [
-                      {
-                        id: makeId("att"),
-                        kind: "video",
-                        url: job.result_url,
-                        caption: prompt,
-                      },
-                    ]
-                  : undefined,
+              attachments: job.result_url
+                ? [
+                    {
+                      id: makeId("att"),
+                      kind: "video",
+                      url: job.result_url,
+                      caption: prompt,
+                    },
+                  ]
+                : undefined,
             });
             finalizeMessage(assistantId, {
               status: "complete",
@@ -352,9 +348,7 @@ export function ChatPage(): JSX.Element {
           return;
         }
         case "document": {
-          const input = document.querySelector<HTMLButtonElement>(
-            '[data-testid="pick-document"]',
-          );
+          const input = document.querySelector<HTMLButtonElement>('[data-testid="pick-document"]');
           input?.click();
           return;
         }
@@ -362,15 +356,7 @@ export function ChatPage(): JSX.Element {
           return;
       }
     },
-    [
-      appendMessage,
-      draft,
-      finalizeMessage,
-      patchMessage,
-      setDraft,
-      setError,
-      setSending,
-    ],
+    [appendMessage, draft, finalizeMessage, patchMessage, setDraft, setError, setSending],
   );
 
   const handleAttachmentAdded = useCallback(
@@ -387,9 +373,7 @@ export function ChatPage(): JSX.Element {
   const handleActionDispatch = useCallback(
     (action: ChatAction) => {
       if (action === "image" && draft.trim().length === 0) {
-        const input = document.querySelector<HTMLButtonElement>(
-          '[data-testid="pick-image"]',
-        );
+        const input = document.querySelector<HTMLButtonElement>('[data-testid="pick-image"]');
         input?.click();
         return;
       }
@@ -401,9 +385,7 @@ export function ChatPage(): JSX.Element {
   // Allow attaching a captured image via clipboard upload flow.
   const handleClipboardPaste = useCallback(
     async (e: React.ClipboardEvent<HTMLDivElement>) => {
-      const file = Array.from(e.clipboardData.files).find((f) =>
-        f.type.startsWith("image/"),
-      );
+      const file = Array.from(e.clipboardData.files).find((f) => f.type.startsWith("image/"));
       if (!file) return;
       const base64 = await readFileAsBase64(file);
       addAttachment({
@@ -434,9 +416,7 @@ export function ChatPage(): JSX.Element {
       <div className="flex-1 overflow-hidden px-3 py-2">
         <MessageList
           messages={messages}
-          emptyState={
-            <EmptyState name={user?.first_name ?? user?.username ?? null} />
-          }
+          emptyState={<EmptyState name={user?.first_name ?? user?.username ?? null} />}
         />
       </div>
 
@@ -464,15 +444,13 @@ export function ChatPage(): JSX.Element {
   );
 }
 
-function EmptyState({ name }: { name: string | null }): JSX.Element {
+function EmptyState({ name }: { name: string | null }): ReactElement {
   return (
     <div className="max-w-md text-center text-sm text-tg-hint">
-      <p className="mb-2 text-base font-semibold text-tg-text">
-        Hi{name ? `, ${name}` : ""} 👋
-      </p>
+      <p className="mb-2 text-base font-semibold text-tg-text">Hi{name ? `, ${name}` : ""} 👋</p>
       <p>
-        Pick a mode above and start chatting. Use the buttons below to generate
-        images, videos, run a web search or analyse a document.
+        Pick a mode above and start chatting. Use the buttons below to generate images, videos, run
+        a web search or analyse a document.
       </p>
     </div>
   );

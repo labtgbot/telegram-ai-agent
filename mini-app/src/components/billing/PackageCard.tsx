@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { Button } from "@/components/Button";
 import type { PackageItem } from "@/types/billing";
 
@@ -17,7 +18,7 @@ export function PackageCard({
   isBuying = false,
   disabled = false,
   onBuy,
-}: PackageCardProps): JSX.Element {
+}: PackageCardProps): ReactElement {
   const borderClass = isHighlighted
     ? "border-tg-button"
     : "border-transparent hover:border-tg-separator";

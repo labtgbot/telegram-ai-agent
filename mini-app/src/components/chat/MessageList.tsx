@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useEffect, useRef } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 
@@ -6,10 +7,10 @@ import { MessageBubble } from "@/components/chat/MessageBubble";
 
 interface MessageListProps {
   messages: ChatMessage[];
-  emptyState?: JSX.Element;
+  emptyState?: ReactElement;
 }
 
-export function MessageList({ messages, emptyState }: MessageListProps): JSX.Element {
+export function MessageList({ messages, emptyState }: MessageListProps): ReactElement {
   const ref = useRef<VirtuosoHandle | null>(null);
   const lastContent = messages[messages.length - 1]?.content;
 

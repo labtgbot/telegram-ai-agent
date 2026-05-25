@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Button } from "@/components/Button";
@@ -24,7 +25,7 @@ function isEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
-export function SettingsPage(): JSX.Element {
+export function SettingsPage(): ReactElement {
   const { t } = useTranslation();
   const scheme = useThemeStore((s) => s.scheme);
   const user = useUserStore((s) => s.user);

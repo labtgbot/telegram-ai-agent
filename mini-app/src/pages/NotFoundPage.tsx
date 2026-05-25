@@ -1,9 +1,10 @@
+import type { ReactElement } from "react";
 import { Link } from "react-router-dom";
 
 import { Card } from "@/components/Card";
 import { useTranslation } from "@/i18n/useTranslation";
 
-export function NotFoundPage(): JSX.Element {
+export function NotFoundPage(): ReactElement {
   const { t } = useTranslation();
   return (
     <Card title={t("notFound.title")}>

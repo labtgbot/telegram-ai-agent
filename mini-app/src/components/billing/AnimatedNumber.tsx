@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
 interface AnimatedNumberProps {
@@ -33,7 +34,7 @@ export function AnimatedNumber({
   className,
   format,
   "data-testid": testId,
-}: AnimatedNumberProps): JSX.Element {
+}: AnimatedNumberProps): ReactElement {
   const [display, setDisplay] = useState(value);
   const fromRef = useRef(value);
   const rafRef = useRef<number | null>(null);

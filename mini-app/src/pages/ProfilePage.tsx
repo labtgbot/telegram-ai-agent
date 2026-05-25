@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Avatar } from "@/components/Avatar";
@@ -24,7 +25,7 @@ function formatDate(value: string | null | undefined, language: string): string 
   }).format(parsed);
 }
 
-export function ProfilePage(): JSX.Element {
+export function ProfilePage(): ReactElement {
   const user = useUserStore((s) => s.user);
   const setUser = useUserStore((s) => s.setUser);
   const { t, language } = useTranslation();
@@ -148,7 +149,7 @@ interface ProfileRowProps {
   testId?: string;
 }
 
-function ProfileRow({ label, value, testId }: ProfileRowProps): JSX.Element {
+function ProfileRow({ label, value, testId }: ProfileRowProps): ReactElement {
   return (
     <div className="flex items-center justify-between py-2" data-testid={testId}>
       <dt className="text-tg-hint">{label}</dt>

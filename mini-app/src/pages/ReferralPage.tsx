@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "@/components/Button";
@@ -25,7 +26,7 @@ function shareViaTelegram(link: string, message: string): boolean {
   }
 }
 
-export function ReferralPage(): JSX.Element {
+export function ReferralPage(): ReactElement {
   const { t } = useTranslation();
   const [data, setData] = useState<ReferralSummary | null>(null);
   const [loading, setLoading] = useState(false);

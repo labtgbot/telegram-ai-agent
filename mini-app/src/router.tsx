@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { lazy, Suspense } from "react";
 import { createBrowserRouter } from "react-router-dom";
 
@@ -10,9 +11,7 @@ import { RouteFallback } from "@/components/RouteFallback";
 // single fast paint over an instantly-interactive deeper navigation,
 // and Suspense serves a skeleton in the < 100 ms range it takes for
 // the chunk to arrive from the CDN.
-const HomePage = lazy(() =>
-  import("@/pages/HomePage").then((m) => ({ default: m.HomePage })),
-);
+const HomePage = lazy(() => import("@/pages/HomePage").then((m) => ({ default: m.HomePage })));
 const BalancePage = lazy(() =>
   import("@/pages/BalancePage").then((m) => ({ default: m.BalancePage })),
 );
@@ -32,7 +31,7 @@ const SettingsPage = lazy(() =>
   import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
 );
 
-const withSuspense = (element: JSX.Element): JSX.Element => (
+const withSuspense = (element: ReactElement): ReactElement => (
   <Suspense fallback={<RouteFallback />}>{element}</Suspense>
 );
 
