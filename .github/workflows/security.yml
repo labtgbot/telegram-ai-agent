@@ -284,12 +284,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Set apt security refresh key
+        id: apt-security-refresh
+        run: echo "key=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
       - name: Build backend image (prod target)
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile.backend
           target: prod
+          build-args: |
+            APT_SECURITY_REFRESH=${{ steps.apt-security-refresh.outputs.key }}
           load: true
           push: false
           tags: tgai-backend:security-scan
