@@ -251,7 +251,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ monitoring
     metrics_enabled: bool = Field(
         default=True,
-        description="Expose Prometheus metrics at /metrics via prometheus-fastapi-instrumentator.",
+        description="Expose Prometheus metrics at the configured metrics path.",
     )
     metrics_path: str = Field(
         default="/metrics",
