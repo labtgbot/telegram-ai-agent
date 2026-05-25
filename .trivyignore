@@ -48,4 +48,5 @@ CVE-2026-41305
 # only while the upstream Debian package has no fix yet.
 # See audit-report.md § F-008.
 # ---------------------------------------------------------------------------
-CVE-2026-40355
+# (intentionally empty — populate when a future scan finds an unfixable
+# Debian CVE we explicitly accept)
