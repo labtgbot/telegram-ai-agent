@@ -15,7 +15,7 @@ import { readAccessToken } from "@/lib/auth/cookies";
 
 describe("GET /api/admin/analytics/export.csv", () => {
   beforeEach(() => {
-    vi.mocked(readAccessToken).mockReturnValue("token-xyz");
+    vi.mocked(readAccessToken).mockResolvedValue("token-xyz");
   });
 
   afterEach(() => {
@@ -23,7 +23,7 @@ describe("GET /api/admin/analytics/export.csv", () => {
   });
 
   it("returns 401 when no access token is present", async () => {
-    vi.mocked(readAccessToken).mockReturnValue(undefined);
+    vi.mocked(readAccessToken).mockResolvedValue(undefined);
     const response = await GET(new Request("http://localhost/api/admin/analytics/export.csv"));
     expect(response.status).toBe(401);
   });
