@@ -36,7 +36,6 @@ const TERMINAL_STATUSES: ReadonlySet<PaymentStatusValue> = new Set([
 
 async function pollUntilTerminal(invoiceId: string): Promise<PaymentStatus> {
   const started = Date.now();
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const snapshot = await fetchPaymentStatus(invoiceId);
     if (TERMINAL_STATUSES.has(snapshot.status)) {
