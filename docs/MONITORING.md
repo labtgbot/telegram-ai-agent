@@ -23,8 +23,8 @@ alerts and the SLI/SLO contract the on-call rotation defends.
                             └─────────────┘
 ```
 
-* **Metrics** – `prometheus-fastapi-instrumentator` exposes HTTP metrics on
-  `/metrics`, while `app.core.metrics` registers business KPIs
+* **Metrics** – `app.core.metrics` exposes HTTP metrics on `/metrics` and
+  registers business KPIs
   (`tokens_sold_total`, `tokens_spent_total`, `revenue_stars_total`,
   `revenue_usd_total`, `active_users`, `payment_events_total`).
 * **Logs** – structured JSON logs emitted by `structlog` (configure with

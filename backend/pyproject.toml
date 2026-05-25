@@ -23,7 +23,6 @@ dependencies = [
     "python-jose[cryptography]>=3.3,<4",
     "pyotp>=2.9,<3",
     "prometheus-client>=0.20,<1",
-    "prometheus-fastapi-instrumentator>=7.0,<8",
     "sentry-sdk[fastapi]>=2.7,<3",
 ]
 

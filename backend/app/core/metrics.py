@@ -1,8 +1,10 @@
 """Prometheus metrics for the FastAPI backend.
 
 The HTTP-level metrics (requests total, latency histogram, in-flight requests,
-exceptions) are emitted by ``prometheus-fastapi-instrumentator``. This module
-adds the *business* metrics referenced in the Phase 4 SLO catalogue:
+exceptions) are emitted by a lightweight ASGI middleware in this module. This
+keeps the dependency graph compatible with patched Starlette releases while
+still exposing the standard Prometheus series used by dashboards. This module
+also adds the *business* metrics referenced in the Phase 4 SLO catalogue:
 
 * ``tokens_sold_total`` — counter of tokens credited by completed purchases.
 * ``tokens_spent_total`` — counter of tokens debited by spends, labelled by service.
@@ -25,8 +27,14 @@ from contextlib import suppress
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
-from prometheus_client import CollectorRegistry, Counter, Gauge
-from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import (
+    CONTENT_TYPE_LATEST,
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+)
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import Settings, get_settings
@@ -102,6 +110,24 @@ payment_events_total: Counter = Counter(
     namespace=NAMESPACE,
     subsystem=SUBSYSTEM_BUSINESS,
     registry=REGISTRY,
+)
+
+http_requests_total: Counter = Counter(
+    name="http_requests_total",
+    documentation="Total HTTP requests processed by the backend.",
+    labelnames=("handler", "method", "status"),
+)
+
+http_request_duration_seconds: Histogram = Histogram(
+    name="http_request_duration_seconds",
+    documentation="HTTP request latency in seconds.",
+    labelnames=("handler", "method", "status"),
+)
+
+tgai_http_requests_in_progress: Gauge = Gauge(
+    name="tgai_http_requests_in_progress",
+    documentation="HTTP requests currently being processed by the backend.",
+    labelnames=("handler", "method"),
 )
 
 
@@ -267,6 +293,51 @@ class ActiveUserMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class HttpMetricsMiddleware(BaseHTTPMiddleware):
+    """Emit Prometheus HTTP counters without pinning Starlette below 1.0."""
+
+    def __init__(self, app: Any, *, excluded_paths: set[str]) -> None:
+        super().__init__(app)
+        self._excluded_paths = excluded_paths
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Any],
+    ) -> Response:
+        path = request.url.path
+        if path in self._excluded_paths:
+            return await call_next(request)
+
+        method = request.method
+        handler = path
+        tgai_http_requests_in_progress.labels(handler=handler, method=method).inc()
+        started_at = time.perf_counter()
+        status_code = "500"
+
+        try:
+            response = await call_next(request)
+            status_code = str(response.status_code)
+            return response
+        except Exception:
+            http_requests_total.labels(handler=handler, method=method, status=status_code).inc()
+            http_request_duration_seconds.labels(
+                handler=handler,
+                method=method,
+                status=status_code,
+            ).observe(time.perf_counter() - started_at)
+            raise
+        finally:
+            tgai_http_requests_in_progress.labels(handler=handler, method=method).dec()
+            if status_code != "500":
+                http_requests_total.labels(handler=handler, method=method, status=status_code).inc()
+                http_request_duration_seconds.labels(
+                    handler=handler,
+                    method=method,
+                    status=status_code,
+                ).observe(time.perf_counter() - started_at)
+
+
 def setup_metrics(app: FastAPI, settings: Settings | None = None) -> None:
     """Wire Prometheus instrumentation onto ``app``.
 
@@ -281,22 +352,14 @@ def setup_metrics(app: FastAPI, settings: Settings | None = None) -> None:
     if getattr(app.state, "metrics_installed", False):
         return
 
-    instrumentator = Instrumentator(
-        should_group_status_codes=True,
-        should_ignore_untemplated=True,
-        should_respect_env_var=False,
-        excluded_handlers=[cfg.metrics_path, "/health/live", "/api/v1/health/live"],
-        env_var_name="ENABLE_METRICS",
-        inprogress_name="tgai_http_requests_in_progress",
-        inprogress_labels=True,
+    app.add_middleware(
+        HttpMetricsMiddleware,
+        excluded_paths={cfg.metrics_path, "/health/live", "/api/v1/health/live"},
     )
-    instrumentator.instrument(app)
-    instrumentator.expose(
-        app,
-        endpoint=cfg.metrics_path,
-        include_in_schema=False,
-        tags=["monitoring"],
-    )
+
+    @app.get(cfg.metrics_path, include_in_schema=False, tags=["monitoring"])
+    async def metrics_endpoint() -> Response:
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     tracker = get_active_user_tracker(cfg)
     app.add_middleware(ActiveUserMiddleware, tracker=tracker)
@@ -307,9 +370,12 @@ def setup_metrics(app: FastAPI, settings: Settings | None = None) -> None:
 __all__ = [
     "ActiveUserMiddleware",
     "ActiveUserTracker",
+    "HttpMetricsMiddleware",
     "REGISTRY",
     "active_users",
     "get_active_user_tracker",
+    "http_request_duration_seconds",
+    "http_requests_total",
     "observe_payment_event",
     "observe_purchase",
     "observe_spend",
@@ -318,6 +384,7 @@ __all__ = [
     "revenue_stars_total",
     "revenue_usd_total",
     "setup_metrics",
+    "tgai_http_requests_in_progress",
     "tokens_sold_total",
     "tokens_spent_total",
 ]
