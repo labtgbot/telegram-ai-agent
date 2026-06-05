@@ -825,6 +825,13 @@ by step.
 > Telegram WebApp), `admin-dashboard/` (Next.js), and `docker/`, `deploy/`,
 > `.github/`, `scripts/` infrastructure.
 
+## Tracking
+
+Every finding is filed as its own GitHub issue with area labels, a complexity
+label and a remediation-stage label (`stage-0-blocker` … `stage-3-low`). They are
+grouped under the tracking epic **#173**. Finding `#NN` in the table below maps to
+GitHub issue **#(137 + NN)** (finding 01 → issue #138 … finding 35 → issue #172).
+
 ## Findings summary
 
 Total findings: **{len(FINDINGS)}** — {sev_line}.
