@@ -1,0 +1,427 @@
+[
+  {
+    "num": 1,
+    "file": "docs/audit/findings/01-admin-jwt-default-secret.md",
+    "title": "[SEC][CRITICAL] Admin dashboard signs/verifies JWTs with hardcoded fallback secret `change-me`",
+    "labels": [
+      "bug",
+      "security",
+      "admin-crm"
+    ],
+    "severity": "CRITICAL",
+    "stage": 0
+  },
+  {
+    "num": 2,
+    "file": "docs/audit/findings/02-token-usage-partition-exhaustion.md",
+    "title": "[DATA][CRITICAL] `token_usage_logs` partition exhaustion \u2014 INSERTs fail ~2 months after deploy",
+    "labels": [
+      "bug",
+      "database",
+      "backend"
+    ],
+    "severity": "CRITICAL",
+    "stage": 0
+  },
+  {
+    "num": 3,
+    "file": "docs/audit/findings/03-rate-limit-state-user-never-set.md",
+    "title": "[SEC][HIGH] Per-user rate limiting is bypassed \u2014 `request.state.user` is never set",
+    "labels": [
+      "bug",
+      "security",
+      "backend"
+    ],
+    "severity": "HIGH",
+    "stage": 1
+  },
+  {
+    "num": 4,
+    "file": "docs/audit/findings/04-webhook-secret-no-prod-guard.md",
+    "title": "[SEC][HIGH] Telegram webhook signature verification disabled by default with no production guard",
+    "labels": [
+      "bug",
+      "security",
+      "telegram",
+      "backend"
+    ],
+    "severity": "HIGH",
+    "stage": 1
+  },
+  {
+    "num": 5,
+    "file": "docs/audit/findings/05-bot-bypasses-rate-limit.md",
+    "title": "[SEC][HIGH] Bot chat commands bypass rate limiting entirely",
+    "labels": [
+      "bug",
+      "security",
+      "telegram",
+      "backend"
+    ],
+    "severity": "HIGH",
+    "stage": 1
+  },
+  {
+    "num": 6,
+    "file": "docs/audit/findings/06-xforwarded-for-trusted.md",
+    "title": "[SEC][HIGH] `X-Forwarded-For` trusted unconditionally \u2192 rate-limit evasion + forged audit IPs",
+    "labels": [
+      "bug",
+      "security",
+      "backend"
+    ],
+    "severity": "HIGH",
+    "stage": 1
+  },
+  {
+    "num": 7,
+    "file": "docs/audit/findings/07-account-deletion-batch-rollback.md",
+    "title": "[BUG][HIGH] Account-deletion worker: one failure rolls back the whole GDPR batch",
+    "labels": [
+      "bug",
+      "backend",
+      "security"
+    ],
+    "severity": "HIGH",
+    "stage": 1
+  },
+  {
+    "num": 8,
+    "file": "docs/audit/findings/08-stale-balance-cache-after-purchase.md",
+    "title": "[BUG][HIGH] Stale balance cache after a successful Stars purchase (pending branch)",
+    "labels": [
+      "bug",
+      "payments",
+      "tokens",
+      "backend"
+    ],
+    "severity": "HIGH",
+    "stage": 1
+  },
+  {
+    "num": 9,
+    "file": "docs/audit/findings/09-model-migration-drift.md",
+    "title": "[DATA][HIGH] Model/migration drift drops payment-idempotency & welcome-uniqueness in model-built schemas",
+    "labels": [
+      "bug",
+      "database",
+      "backend"
+    ],
+    "severity": "HIGH",
+    "stage": 1
+  },
+  {
+    "num": 10,
+    "file": "docs/audit/findings/10-miniapp-broken-routes.md",
+    "title": "[BUG][HIGH] Mini App calls non-existent backend routes (profile / delete-account / data-export broken)",
+    "labels": [
+      "bug",
+      "frontend"
+    ],
+    "severity": "HIGH",
+    "stage": 1
+  },
+  {
+    "num": 11,
+    "file": "docs/audit/findings/11-compose-prod-hardening.md",
+    "title": "[DEVOPS][HIGH] `compose.prod.yml` runs as root, no resource limits, Redis without auth, mutable `:latest` tags",
+    "labels": [
+      "bug",
+      "devops",
+      "security"
+    ],
+    "severity": "HIGH",
+    "stage": 1
+  },
+  {
+    "num": 12,
+    "file": "docs/audit/findings/12-trivyignore-false-mitigation.md",
+    "title": "[DEVOPS][HIGH] `.trivyignore` waives 14 Next.js CVEs citing a mitigation (admin IP-allowlist) that isn't deployed",
+    "labels": [
+      "bug",
+      "devops",
+      "security"
+    ],
+    "severity": "HIGH",
+    "stage": 1
+  },
+  {
+    "num": 13,
+    "file": "docs/audit/findings/13-admin-login-no-bruteforce-throttle.md",
+    "title": "[SEC][MEDIUM] No brute-force throttle on admin login; attempt counter is resettable",
+    "labels": [
+      "bug",
+      "security",
+      "backend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 14,
+    "file": "docs/audit/findings/14-csv-formula-injection.md",
+    "title": "[SEC][MEDIUM] CSV/formula injection in admin user export",
+    "labels": [
+      "bug",
+      "security",
+      "admin-crm",
+      "backend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 15,
+    "file": "docs/audit/findings/15-initdata-in-query-param.md",
+    "title": "[SEC][MEDIUM] Telegram initData accepted via URL query parameter (credential leaks to logs)",
+    "labels": [
+      "bug",
+      "security",
+      "telegram",
+      "backend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 16,
+    "file": "docs/audit/findings/16-audit-log-readable-by-analyst.md",
+    "title": "[SEC][MEDIUM] Admin audit log readable by the least-privileged `analyst` role",
+    "labels": [
+      "bug",
+      "security",
+      "admin-crm",
+      "backend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 17,
+    "file": "docs/audit/findings/17-daily-bonus-concurrent-500.md",
+    "title": "[BUG][MEDIUM] Concurrent daily-bonus claim raises 500 instead of AlreadyClaimed and poisons the session",
+    "labels": [
+      "bug",
+      "tokens",
+      "backend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 18,
+    "file": "docs/audit/findings/18-writethrough-cache-uncommitted.md",
+    "title": "[BUG][MEDIUM] Write-through balance cache can serve uncommitted / rolled-back balances",
+    "labels": [
+      "bug",
+      "tokens",
+      "backend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 19,
+    "file": "docs/audit/findings/19-toctou-generation-precheck.md",
+    "title": "[BUG][MEDIUM] TOCTOU pre-check in AI generation services burns provider cost under concurrency",
+    "labels": [
+      "bug",
+      "ai-service",
+      "tokens",
+      "backend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 20,
+    "file": "docs/audit/findings/20-broadcast-no-row-claiming.md",
+    "title": "[BUG][MEDIUM] Broadcast worker lacks row claiming \u2192 duplicate sends under overlapping runs",
+    "labels": [
+      "bug",
+      "telegram",
+      "backend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 21,
+    "file": "docs/audit/findings/21-webhook-update-id-idempotency.md",
+    "title": "[BUG][MEDIUM] No webhook `update_id` idempotency \u2192 double side effects on Telegram redelivery",
+    "labels": [
+      "bug",
+      "telegram",
+      "backend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 22,
+    "file": "docs/audit/findings/22-broadcast-429-single-shot.md",
+    "title": "[BUG][MEDIUM] Broadcast 429 backoff is single-shot \u2192 drops recipients during sustained flood limit",
+    "labels": [
+      "bug",
+      "telegram",
+      "backend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 23,
+    "file": "docs/audit/findings/23-admin-open-redirect.md",
+    "title": "[SEC][MEDIUM] Admin dashboard open redirect via protocol-relative `from` parameter",
+    "labels": [
+      "bug",
+      "security",
+      "admin-crm"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 24,
+    "file": "docs/audit/findings/24-admin-middleware-role-gaps.md",
+    "title": "[SEC][MEDIUM] Admin middleware role map omits `/system` and `/content` (default to analyst)",
+    "labels": [
+      "bug",
+      "security",
+      "admin-crm"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 25,
+    "file": "docs/audit/findings/25-admin-token-persist-no-validation.md",
+    "title": "[BUG][MEDIUM] Admin auth verify/refresh persist tokens without validating the upstream payload",
+    "labels": [
+      "bug",
+      "admin-crm",
+      "security"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 26,
+    "file": "docs/audit/findings/26-miniapp-error-swallowing.md",
+    "title": "[BUG][MEDIUM] Mini App swallows API errors (no auth vs diagnostic distinction)",
+    "labels": [
+      "bug",
+      "frontend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 27,
+    "file": "docs/audit/findings/27-miniapp-balance-not-refreshed.md",
+    "title": "[BUG][MEDIUM] Mini App chat never refreshes the displayed balance after token spend",
+    "labels": [
+      "bug",
+      "frontend",
+      "tokens"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 28,
+    "file": "docs/audit/findings/28-alembic-autogenerate-partition-guard.md",
+    "title": "[DATA][MEDIUM] Alembic autogenerate lacks a partition guard \u2192 may emit destructive drops",
+    "labels": [
+      "bug",
+      "database",
+      "backend"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 29,
+    "file": "docs/audit/findings/29-secret-scan-gaps.md",
+    "title": "[DEVOPS][MEDIUM] Secret-scan gaps: over-broad gitleaks allowlist + `npm audit --audit-level=critical`",
+    "labels": [
+      "bug",
+      "devops",
+      "security"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 30,
+    "file": "docs/audit/findings/30-monitoring-default-creds.md",
+    "title": "[DEVOPS][MEDIUM] Monitoring stack ships Grafana `admin/admin` and unauthenticated Prometheus/Alertmanager/Loki",
+    "labels": [
+      "bug",
+      "devops",
+      "security",
+      "analytics"
+    ],
+    "severity": "MEDIUM",
+    "stage": 2
+  },
+  {
+    "num": 31,
+    "file": "docs/audit/findings/31-auth-hardening-bundle.md",
+    "title": "[SEC][LOW] Auth hardening: non-constant-time webhook compare, TOTP replay window, admin enumeration",
+    "labels": [
+      "bug",
+      "security",
+      "backend"
+    ],
+    "severity": "LOW",
+    "stage": 3
+  },
+  {
+    "num": 32,
+    "file": "docs/audit/findings/32-admin-role-headers-leak.md",
+    "title": "[SEC][LOW] Admin middleware leaks `x-admin-role` / `x-admin-sub` response headers",
+    "labels": [
+      "bug",
+      "security",
+      "admin-crm"
+    ],
+    "severity": "LOW",
+    "stage": 3
+  },
+  {
+    "num": 33,
+    "file": "docs/audit/findings/33-db-index-hygiene.md",
+    "title": "[DATA][LOW] Redundant indexes on `users.telegram_id`/`referral_code`; `usage_log_id` has no FK",
+    "labels": [
+      "bug",
+      "database",
+      "backend"
+    ],
+    "severity": "LOW",
+    "stage": 3
+  },
+  {
+    "num": 34,
+    "file": "docs/audit/findings/34-miniapp-frontend-hygiene.md",
+    "title": "[FRONT][LOW] Mini App retries 4xx requests and ships source maps to production",
+    "labels": [
+      "bug",
+      "frontend"
+    ],
+    "severity": "LOW",
+    "stage": 3
+  },
+  {
+    "num": 35,
+    "file": "docs/audit/findings/35-ci-supply-chain.md",
+    "title": "[DEVOPS][LOW] CI supply-chain: third-party actions pinned to mutable tags; kubeval `continue-on-error`",
+    "labels": [
+      "bug",
+      "devops",
+      "security"
+    ],
+    "severity": "LOW",
+    "stage": 3
+  }
+]
