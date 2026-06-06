@@ -11,6 +11,7 @@ We mock:
 
 The shape of these tests mirrors ``test_auth_endpoints.py`` for consistency.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,6 +21,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 
 WEBHOOK_PATH = "/api/v1/bot/webhook"
@@ -174,17 +176,11 @@ def build_app(monkeypatch, store, captured_requests, settings):
     async def fake_get_session():
         yield _SessionStub()
 
-    monkeypatch.setattr(
-        users_module, "find_user_by_telegram_id", fake_find_user_by_telegram_id
-    )
+    monkeypatch.setattr(users_module, "find_user_by_telegram_id", fake_find_user_by_telegram_id)
     monkeypatch.setattr(users_module, "upsert_telegram_user", fake_upsert)
-    monkeypatch.setattr(
-        handlers_module, "find_user_by_telegram_id", fake_find_user_by_telegram_id
-    )
+    monkeypatch.setattr(handlers_module, "find_user_by_telegram_id", fake_find_user_by_telegram_id)
     monkeypatch.setattr(bot_users_service, "upsert_telegram_user", fake_upsert)
-    monkeypatch.setattr(
-        bot_users_service, "_find_user_by_referral_code", fake_find_by_referral
-    )
+    monkeypatch.setattr(bot_users_service, "_find_user_by_referral_code", fake_find_by_referral)
 
     # --- settings + bot client -------------------------------------------
 
@@ -212,9 +208,7 @@ def build_app(monkeypatch, store, captured_requests, settings):
     )
 
     monkeypatch.setattr(bot_route, "get_bot_client", lambda: fake_client)
-    monkeypatch.setattr(
-        "app.core.config.get_settings", lambda: settings, raising=True
-    )
+    monkeypatch.setattr("app.core.config.get_settings", lambda: settings, raising=True)
     monkeypatch.setattr(deps, "get_settings", lambda: settings)
 
     app = create_app()
@@ -260,6 +254,32 @@ def _start_update(telegram_id: int, *, payload: str | None = None) -> dict[str, 
 
 
 # ------------------------------------------------------------------- tests
+
+
+def test_check_secret_uses_constant_time_compare(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api.v1 import bot as bot_route
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_compare(received: str, expected: str) -> bool:
+        calls.append((received, expected))
+        return True
+
+    monkeypatch.setattr(bot_route.hmac, "compare_digest", fake_compare)
+
+    bot_route._check_secret("supersecret", "supersecret")
+
+    assert calls == [("supersecret", "supersecret")]
+
+
+def test_check_secret_rejects_missing_secret_header() -> None:
+    from app.api.v1 import bot as bot_route
+
+    with pytest.raises(HTTPException) as excinfo:
+        bot_route._check_secret("supersecret", None)
+
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.detail == "invalid_webhook_secret"
 
 
 @pytest.mark.asyncio

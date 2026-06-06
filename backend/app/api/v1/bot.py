@@ -6,8 +6,10 @@ via ``setWebhook``) before dispatching, then always return ``200 OK`` — even
 if the handler raised — so Telegram won't retry the same update in a tight
 loop.
 """
+
 from __future__ import annotations
 
+import hmac
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
@@ -68,7 +70,7 @@ BotClientDep = Annotated[TelegramClient, Depends(get_bot_client)]
 def _check_secret(expected: str, received: str | None) -> None:
     if not expected:
         return  # secret disabled in this environment
-    if not received or received != expected:
+    if not received or not hmac.compare_digest(received, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid_webhook_secret",
