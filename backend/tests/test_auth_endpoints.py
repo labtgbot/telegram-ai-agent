@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import time
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
@@ -105,9 +106,43 @@ class FakeRedis:
         return key in self.store
 
 
+@dataclass(frozen=True)
+class _RateLimitCall:
+    plan: str
+    identifier: str
+    action: str
+
+
+class FakeRateLimiter:
+    def __init__(self) -> None:
+        self.calls: list[_RateLimitCall] = []
+        self.block_on: _RateLimitCall | None = None
+
+    async def consume(self, *, plan: str, identifier: str, action: str) -> object:
+        call = _RateLimitCall(plan=plan, identifier=identifier, action=action)
+        self.calls.append(call)
+        if call == self.block_on:
+            from app.services.rate_limiter import RateLimitedError
+
+            raise RateLimitedError(
+                plan=plan,
+                action=action,
+                quota_key="request_per_15m",
+                limit=5,
+                retry_after=60,
+                reset_after=60,
+            )
+        return object()
+
+
 @pytest.fixture
 def fake_redis() -> FakeRedis:
     return FakeRedis()
+
+
+@pytest.fixture
+def fake_rate_limiter() -> FakeRateLimiter:
+    return FakeRateLimiter()
 
 
 @pytest.fixture
@@ -121,7 +156,7 @@ def stub_user() -> FakeUser:
 
 
 @pytest.fixture
-def build_app(monkeypatch, fake_settings, fake_redis, stub_user):
+def build_app(monkeypatch, fake_settings, fake_redis, fake_rate_limiter, stub_user):
     """Return a callable that builds an app wired with overridable stubs."""
     from app.api.v1 import auth as auth_module
     from app.auth import dependencies as deps
@@ -188,14 +223,19 @@ def build_app(monkeypatch, fake_settings, fake_redis, stub_user):
     app = create_app()
 
     # Override dependencies that resolve via Depends() at request time.
+    from app.api.rate_limit import get_rate_limiter
     from app.auth.dependencies import _settings_dep
     from app.core.database import get_session as real_get_session
 
     async def _yield_none():
         yield None
 
+    async def _fake_get_rate_limiter():
+        return fake_rate_limiter
+
     app.dependency_overrides[real_get_session] = _yield_none
     app.dependency_overrides[_settings_dep] = lambda: fake_settings
+    app.dependency_overrides[get_rate_limiter] = _fake_get_rate_limiter
     from app.api.v1.auth import _redis_dep
 
     app.dependency_overrides[_redis_dep] = lambda: fake_redis
@@ -296,6 +336,79 @@ async def test_admin_login_round_trip_returns_tokens(build_app) -> None:
         )
         assert refreshed.status_code == 200
         assert refreshed.json()["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_admin_login_endpoints_are_rate_limited_by_ip_and_telegram_id(
+    build_app,
+    fake_rate_limiter,
+) -> None:
+    app, _ = build_app
+    async with await _client(app) as c:
+        req = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
+        assert req.status_code == 200, req.text
+
+        verify = await c.post(
+            "/api/v1/auth/admin/login/verify",
+            json={"telegram_id": 42, "code": req.json()["code"]},
+        )
+        assert verify.status_code == 200, verify.text
+
+    assert fake_rate_limiter.calls == [
+        _RateLimitCall(
+            plan="admin_login",
+            identifier="ip:127.0.0.1",
+            action="admin_login_request",
+        ),
+        _RateLimitCall(
+            plan="admin_login",
+            identifier="telegram_id:42",
+            action="admin_login_request",
+        ),
+        _RateLimitCall(
+            plan="admin_login",
+            identifier="ip:127.0.0.1",
+            action="admin_login_verify",
+        ),
+        _RateLimitCall(
+            plan="admin_login",
+            identifier="telegram_id:42",
+            action="admin_login_verify",
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_admin_login_rate_limit_breach_returns_429(
+    build_app,
+    fake_rate_limiter,
+) -> None:
+    fake_rate_limiter.block_on = _RateLimitCall(
+        plan="admin_login",
+        identifier="telegram_id:42",
+        action="admin_login_request",
+    )
+    app, _ = build_app
+
+    async with await _client(app) as c:
+        resp = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
+
+    assert resp.status_code == 429
+    assert resp.headers["retry-after"] == "60"
+    assert resp.json()["detail"] == {
+        "error": "rate_limited",
+        "plan": "admin_login",
+        "action": "admin_login_request",
+        "quota": "request_per_15m",
+        "limit": 5,
+        "retry_after": 60,
+    }
 
 
 @pytest.mark.asyncio

@@ -162,6 +162,51 @@ async def test_verify_explodes_after_max_attempts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_re_request_does_not_reset_failed_attempt_budget() -> None:
+    redis = FakeRedis()
+    first = await request_admin_login(
+        redis, telegram_id=120, secret="s", ttl_seconds=60, code_length=6
+    )
+    wrong = "000000" if first.code != "000000" else "000001"
+
+    with pytest.raises(LoginCodeInvalidError):
+        await verify_admin_login(
+            redis,
+            telegram_id=120,
+            code=wrong,
+            secret="s",
+            max_attempts=2,
+            ttl_seconds=60,
+        )
+
+    await request_admin_login(
+        redis, telegram_id=120, secret="s", ttl_seconds=60, code_length=6
+    )
+    with pytest.raises(LoginCodeInvalidError):
+        await verify_admin_login(
+            redis,
+            telegram_id=120,
+            code=wrong,
+            secret="s",
+            max_attempts=2,
+            ttl_seconds=60,
+        )
+
+    await request_admin_login(
+        redis, telegram_id=120, secret="s", ttl_seconds=60, code_length=6
+    )
+    with pytest.raises(LoginCodeAttemptsExceededError):
+        await verify_admin_login(
+            redis,
+            telegram_id=120,
+            code=wrong,
+            secret="s",
+            max_attempts=2,
+            ttl_seconds=60,
+        )
+
+
+@pytest.mark.asyncio
 async def test_verify_rejects_non_numeric_code() -> None:
     redis = FakeRedis()
     await request_admin_login(

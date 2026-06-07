@@ -10,7 +10,8 @@ The data model is a two-level mapping ``{plan: {action: RateLimitRule}}``.
 
 Plans are: ``anonymous`` (unauthenticated callers), ``free`` (registered
 without a paid plan), ``premium`` (one-time premium grant), ``pro``
-(active monthly subscription). See ``docs/architecture/adr/0004-rate-limiting.md``.
+(active monthly subscription), plus the ``admin_login`` pseudo-plan for the
+unauthenticated admin OTP flow. See ``docs/architecture/adr/0004-rate-limiting.md``.
 
 Defaults live in :data:`DEFAULT_RATE_LIMITS`. Operators can override any
 plan/action pair via the ``rate_limits`` key in ``admin_settings`` —
@@ -39,8 +40,9 @@ PLAN_ANONYMOUS: Final[str] = "anonymous"
 PLAN_FREE: Final[str] = "free"
 PLAN_PREMIUM: Final[str] = "premium"
 PLAN_PRO: Final[str] = "pro"
+PLAN_ADMIN_LOGIN: Final[str] = "admin_login"
 KNOWN_PLANS: Final[frozenset[str]] = frozenset(
-    {PLAN_ANONYMOUS, PLAN_FREE, PLAN_PREMIUM, PLAN_PRO}
+    {PLAN_ANONYMOUS, PLAN_FREE, PLAN_PREMIUM, PLAN_PRO, PLAN_ADMIN_LOGIN}
 )
 
 # Canonical action codes. ``default`` is the catch-all bucket the dependency
@@ -52,6 +54,8 @@ ACTION_VOICE: Final[str] = "voice"
 ACTION_TEXT: Final[str] = "text"
 ACTION_SEARCH: Final[str] = "search"
 ACTION_DOCUMENT: Final[str] = "document"
+ACTION_ADMIN_LOGIN_REQUEST: Final[str] = "admin_login_request"
+ACTION_ADMIN_LOGIN_VERIFY: Final[str] = "admin_login_verify"
 KNOWN_ACTIONS: Final[frozenset[str]] = frozenset(
     {
         ACTION_DEFAULT,
@@ -61,6 +65,8 @@ KNOWN_ACTIONS: Final[frozenset[str]] = frozenset(
         ACTION_TEXT,
         ACTION_SEARCH,
         ACTION_DOCUMENT,
+        ACTION_ADMIN_LOGIN_REQUEST,
+        ACTION_ADMIN_LOGIN_VERIFY,
     }
 )
 
@@ -83,6 +89,7 @@ class RateLimitRule:
 # and have stable semantics so admins can change limits without code changes.
 _HOUR_SECONDS: Final[int] = 3600
 _DAY_SECONDS: Final[int] = 24 * 3600
+_FIFTEEN_MINUTES_SECONDS: Final[int] = 15 * 60
 
 
 def _hour(limit: int) -> RateLimitRule:
@@ -91,6 +98,10 @@ def _hour(limit: int) -> RateLimitRule:
 
 def _day(limit: int) -> RateLimitRule:
     return RateLimitRule(limit=limit, window_seconds=_DAY_SECONDS)
+
+
+def _fifteen_minutes(limit: int) -> RateLimitRule:
+    return RateLimitRule(limit=limit, window_seconds=_FIFTEEN_MINUTES_SECONDS)
 
 
 # Default catalog. The values match the SECURITY.md / ADR-0004 reference table
@@ -129,6 +140,10 @@ DEFAULT_RATE_LIMITS: Final[dict[str, dict[str, RateLimitRule]]] = {
         "search_per_day": _day(1_500),
         "document_per_day": _day(150),
     },
+    PLAN_ADMIN_LOGIN: {
+        "request_per_15m": _fifteen_minutes(5),
+        "verify_per_15m": _fifteen_minutes(5),
+    },
 }
 
 
@@ -143,6 +158,8 @@ ACTION_QUOTA_KEYS: Final[dict[str, tuple[str, ...]]] = {
     ACTION_TEXT: ("per_hour", "per_day", "text_per_day"),
     ACTION_SEARCH: ("per_hour", "per_day", "search_per_day"),
     ACTION_DOCUMENT: ("per_hour", "per_day", "document_per_day"),
+    ACTION_ADMIN_LOGIN_REQUEST: ("request_per_15m",),
+    ACTION_ADMIN_LOGIN_VERIFY: ("verify_per_15m",),
 }
 
 
@@ -274,6 +291,8 @@ async def load_rate_limits(session: AsyncSession) -> RateLimitConfig:
 
 __all__ = [
     "ACTION_DEFAULT",
+    "ACTION_ADMIN_LOGIN_REQUEST",
+    "ACTION_ADMIN_LOGIN_VERIFY",
     "ACTION_DOCUMENT",
     "ACTION_IMAGE",
     "ACTION_QUOTA_KEYS",
@@ -286,6 +305,7 @@ __all__ = [
     "KNOWN_ACTIONS",
     "KNOWN_PLANS",
     "PLAN_ANONYMOUS",
+    "PLAN_ADMIN_LOGIN",
     "PLAN_FREE",
     "PLAN_PREMIUM",
     "PLAN_PRO",
