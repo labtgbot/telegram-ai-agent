@@ -289,7 +289,10 @@ The production compose file also reads:
 | `DOMAIN` | Public bot/API/Mini App domain used by Caddy. |
 | `ADMIN_DOMAIN` | Public admin dashboard domain used by Caddy. |
 | `ACME_EMAIL` | Email used for Let's Encrypt account registration. |
+| `CADDY_DATA_DIR` | Host directory for Caddy certificates/storage, owned by UID/GID `65534`. |
+| `CADDY_CONFIG_DIR` | Host directory for Caddy autosaved config, owned by UID/GID `65534`. |
 | `POSTGRES_PASSWORD` | Password for the bundled Compose PostgreSQL service. |
+| `REDIS_PASSWORD` | Password required by the bundled Compose Redis service. |
 | `BACKEND_IMAGE` | Backend image reference. |
 | `MINI_APP_IMAGE` | Mini App image reference. |
 | `ADMIN_IMAGE` | Admin image reference. |
@@ -563,6 +566,13 @@ git checkout v0.1.0
 
 ### 7.6 Create `.env.prod`
 
+Prepare the persistent Caddy directories for the non-root Caddy container:
+
+```bash
+sudo install -d -o 65534 -g 65534 -m 0750 /opt/telegram-ai-agent/caddy/data
+sudo install -d -o 65534 -g 65534 -m 0750 /opt/telegram-ai-agent/caddy/config
+```
+
 ```bash
 cp .env.example .env.prod
 chmod 600 .env.prod
@@ -575,14 +585,17 @@ Minimum production values for the bundled Compose stack:
 DOMAIN=bot.example.com
 ADMIN_DOMAIN=admin.example.com
 ACME_EMAIL=ops@example.com
+CADDY_DATA_DIR=/opt/telegram-ai-agent/caddy/data
+CADDY_CONFIG_DIR=/opt/telegram-ai-agent/caddy/config
 
 APP_ENV=production
 APP_DEBUG=false
 LOG_FORMAT=json
 
 POSTGRES_PASSWORD=<random database password>
+REDIS_PASSWORD=<random redis password>
 DATABASE_URL=postgresql+asyncpg://postgres:<same password>@postgres:5432/telegram_ai_agent
-REDIS_URL=redis://redis:6379/0
+REDIS_URL=redis://:<same redis password>@redis:6379/0
 
 TELEGRAM_BOT_TOKEN=<token from BotFather>
 TELEGRAM_BOT_USERNAME=<bot username without @>

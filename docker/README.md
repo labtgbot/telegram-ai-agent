@@ -32,3 +32,18 @@ docker compose -f docker/compose.yml exec backend alembic upgrade head
 ```bash
 docker build -f docker/Dockerfile.backend --target prod -t tgai-backend:prod .
 ```
+
+## Production-like Compose
+
+`compose.prod.yml` intentionally fails fast when release image references or
+secrets are missing. Set explicit `BACKEND_IMAGE`, `MINI_APP_IMAGE`,
+`ADMIN_IMAGE`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `CADDY_DATA_DIR`, and
+`CADDY_CONFIG_DIR` in `.env.prod`.
+
+The Caddy directories must be writable by UID/GID `65534` because the
+production-like stack runs Caddy as a non-root user:
+
+```bash
+sudo install -d -o 65534 -g 65534 -m 0750 /opt/telegram-ai-agent/caddy/data
+sudo install -d -o 65534 -g 65534 -m 0750 /opt/telegram-ai-agent/caddy/config
+```

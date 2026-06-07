@@ -20,6 +20,12 @@ services:
     image: caddy:2.8-alpine
     container_name: tgai-caddy
     restart: unless-stopped
+    user: "65534:65534"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "80:80"
       - "443:443"
@@ -29,16 +35,41 @@ services:
       ACME_EMAIL: ${ACME_EMAIL:-ops@example.com}
     volumes:
       - ./Caddyfile.prod:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      - ${CADDY_DATA_DIR:?CADDY_DATA_DIR must point to a writable directory owned by UID 65534}:/data
+      - ${CADDY_CONFIG_DIR:?CADDY_CONFIG_DIR must point to a writable directory owned by UID 65534}:/config
+    tmpfs:
+      - /tmp:exec,uid=65534,gid=65534,mode=1777
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        cp /usr/bin/caddy /tmp/caddy
+        chmod 0555 /tmp/caddy
+        exec /tmp/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    healthcheck:
+      test: ["CMD", "/tmp/caddy", "validate", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
       backend:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
 
   backend:
-    image: ${BACKEND_IMAGE:-ghcr.io/labtgbot/telegram-ai-agent/backend:latest}
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE must be set to an immutable release tag or digest}
     container_name: tgai-backend
     restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,13 +83,20 @@ services:
       LOG_LEVEL: INFO
       LOG_FORMAT: json
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/telegram_ai_agent
-      REDIS_URL: redis://redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.prod}@redis:6379/0
+    tmpfs:
+      - /tmp:uid=1000,gid=1000,mode=1777
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/health/live').status == 200 else 1)\""]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 1G
     command:
       - uvicorn
       - app.main:app
@@ -68,34 +106,71 @@ services:
       - --no-access-log
 
   mini-app:
-    image: ${MINI_APP_IMAGE:-ghcr.io/labtgbot/telegram-ai-agent/mini-app:latest}
+    image: ${MINI_APP_IMAGE:?MINI_APP_IMAGE must be set to an immutable release tag or digest}
     container_name: tgai-mini-app
     restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:uid=101,gid=101,mode=1777
+      - /var/cache/nginx:uid=101,gid=101,mode=755
+      - /run:uid=101,gid=101,mode=755
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/"]
+      test: ["CMD", "nginx", "-t"]
       interval: 30s
       timeout: 3s
       retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 192M
 
   admin:
-    image: ${ADMIN_IMAGE:-ghcr.io/labtgbot/telegram-ai-agent/admin:latest}
+    image: ${ADMIN_IMAGE:?ADMIN_IMAGE must be set to an immutable release tag or digest}
     container_name: tgai-admin
     restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     env_file:
       - ../.env.prod
     environment:
       PORT: "3001"
       NODE_ENV: production
+    tmpfs:
+      - /tmp:uid=1000,gid=1000,mode=1777
+      - /app/.next/cache:uid=1000,gid=1000,mode=755
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:3001/ >/dev/null"]
+      test: ["CMD", "node", "-e", "const http=require('http');const req=http.get('http://127.0.0.1:3001/',res=>process.exit(res.statusCode && res.statusCode < 500 ? 0 : 1));req.on('error',()=>process.exit(1));req.setTimeout(3000,()=>req.destroy());"]
       interval: 30s
       timeout: 5s
       retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 512M
 
   postgres:
     image: postgres:15-alpine
     container_name: tgai-postgres
     restart: unless-stopped
+    user: "70:70"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.prod}
@@ -103,27 +178,50 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backups:/backups
+    tmpfs:
+      - /tmp:uid=70,gid=70,mode=1777
+      - /run/postgresql:uid=70,gid=70,mode=775
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d telegram_ai_agent"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1G
 
   redis:
     image: redis:7-alpine
     container_name: tgai-redis
     restart: unless-stopped
-    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes"]
+    user: "999:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["redis-server", "--save", "60", "1", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.prod}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.prod}
     volumes:
       - redis_data:/data
+    tmpfs:
+      - /tmp:uid=999,gid=1000,mode=1777
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 10
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
 
 volumes:
   postgres_data:
   redis_data:
-  caddy_data:
-  caddy_config:
