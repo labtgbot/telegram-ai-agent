@@ -10,19 +10,20 @@ A single ``process`` call orchestrates one voice-message round-trip:
 
 1.  Validate the audio reference (URL/base64 + duration cap) and the
     optional reply prompt.
-2.  Pre-check the user's balance against the flat 5-token price.
+2.  Atomically debit the flat 5-token price before the provider call.
 3.  Invoke the Composio ``elevenlabs`` toolkit asking for STT — and, if
     ``synthesize_reply`` is on, follow up with TTS for the assistant's
     answer.
 4.  Normalise the transcripts / audio URL pulled out of the heterogenous
     payloads.
-5.  Atomically debit the cost via :class:`TokenService.spend` and record
-    a structured row in ``token_usage_logs``.
+5.  Attach provider metadata to the structured ``token_usage_logs`` row;
+    on provider failure, refund the debit and write a zero-cost audit row.
 
 The service flushes its writes but does **not** commit — the caller
 controls the outer transaction, matching every other service in
 ``app.services``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -38,11 +39,7 @@ from app.services.composio import (
     ToolResult,
     log_invocation,
 )
-from app.services.token_service import (
-    InsufficientTokensError,
-    TokenService,
-    UserNotFoundError,
-)
+from app.services.token_service import TokenService
 
 logger = get_logger(__name__)
 
@@ -177,8 +174,6 @@ class VoiceProcessingService:
         )
         voice_clean = self._validate_voice(voice)
 
-        await self._assert_balance_sufficient(user_id, VOICE_COST)
-
         stt_request_params: dict[str, Any] = {
             "mode": MODE_STT,
         }
@@ -198,16 +193,37 @@ class VoiceProcessingService:
         if audio_b64_clean is not None:
             stt_provider_params["audio_base64"] = audio_b64_clean
 
-        stt_result = await self._invoke_provider(
+        spend = await self._tokens.spend(
             user_id=user_id,
-            params=stt_provider_params,
-            request_id=request_id,
-            composio_user_id=composio_user_id,
-            phase=MODE_STT,
+            amount=VOICE_COST,
+            service=SERVICE_TYPE,
+            request_params={"stt": stt_request_params},
+            response_status="pending",
         )
+
+        try:
+            stt_result = await self._invoke_provider(
+                user_id=user_id,
+                params=stt_provider_params,
+                request_id=request_id,
+                composio_user_id=composio_user_id,
+                phase=MODE_STT,
+            )
+        except VoiceProviderError:
+            await self._refund_spend(
+                user_id=user_id,
+                transaction_id=spend.transaction_id,
+                reason="voice stt provider failed",
+            )
+            raise
 
         transcript = self._extract_transcript(stt_result)
         if not transcript:
+            await self._refund_spend(
+                user_id=user_id,
+                transaction_id=spend.transaction_id,
+                reason="voice provider returned empty transcript",
+            )
             await log_invocation(
                 self.session,
                 user_id=user_id,
@@ -236,15 +252,28 @@ class VoiceProcessingService:
                 tts_request_params["language"] = detected_language
 
             tts_provider_params = dict(tts_request_params)
-            tts_result = await self._invoke_provider(
-                user_id=user_id,
-                params=tts_provider_params,
-                request_id=request_id,
-                composio_user_id=composio_user_id,
-                phase=MODE_TTS,
-            )
+            try:
+                tts_result = await self._invoke_provider(
+                    user_id=user_id,
+                    params=tts_provider_params,
+                    request_id=request_id,
+                    composio_user_id=composio_user_id,
+                    phase=MODE_TTS,
+                )
+            except VoiceProviderError:
+                await self._refund_spend(
+                    user_id=user_id,
+                    transaction_id=spend.transaction_id,
+                    reason="voice tts provider failed",
+                )
+                raise
             reply_audio_url = self._extract_audio_url(tts_result)
             if reply_audio_url is None:
+                await self._refund_spend(
+                    user_id=user_id,
+                    transaction_id=spend.transaction_id,
+                    reason="voice provider returned empty audio",
+                )
                 await log_invocation(
                     self.session,
                     user_id=user_id,
@@ -270,15 +299,11 @@ class VoiceProcessingService:
                 "text_len": len(reply_text or ""),
             }
 
-        spend = await self._tokens.spend(
+        await self._record_spend_result(
             user_id=user_id,
-            amount=VOICE_COST,
-            service=SERVICE_TYPE,
+            usage_log_id=spend.usage_log_id,
+            result=primary_result,
             request_params=request_params_audit,
-            response_status="ok",
-            processing_time_ms=primary_result.latency_ms,
-            composio_tool=primary_result.tool,
-            mcp_server=primary_result.mcp_server,
         )
 
         logger.info(
@@ -316,13 +341,51 @@ class VoiceProcessingService:
 
     # -------------------------------------------------------------- internal
 
-    async def _assert_balance_sufficient(self, user_id: int, cost: int) -> None:
+    async def _record_spend_result(
+        self,
+        *,
+        user_id: int,
+        usage_log_id: int,
+        result: ToolResult,
+        request_params: dict[str, Any],
+    ) -> None:
         try:
-            balance = await self._tokens.get_balance(user_id)
-        except UserNotFoundError:
-            raise
-        if balance < cost:
-            raise InsufficientTokensError(required=cost, available=balance)
+            await self._tokens.record_spend_result(
+                usage_log_id=usage_log_id,
+                response_status="ok",
+                processing_time_ms=result.latency_ms,
+                composio_tool=result.tool,
+                mcp_server=result.mcp_server,
+                request_params=request_params,
+            )
+        except Exception as exc:  # noqa: BLE001 — audit metadata is best-effort
+            logger.warning(
+                "voice.spend_usage_update_failed",
+                user_id=user_id,
+                usage_log_id=usage_log_id,
+                error=str(exc),
+            )
+
+    async def _refund_spend(
+        self,
+        *,
+        user_id: int,
+        transaction_id: int,
+        reason: str,
+    ) -> None:
+        try:
+            await self._tokens.refund(
+                transaction_id=transaction_id,
+                reason=reason[:100],
+            )
+        except Exception as exc:  # noqa: BLE001 — preserve the provider error
+            logger.warning(
+                "voice.refund_failed",
+                user_id=user_id,
+                transaction_id=transaction_id,
+                reason=reason,
+                error=str(exc),
+            )
 
     async def _invoke_provider(
         self,
@@ -364,8 +427,7 @@ class VoiceProcessingService:
                 request_id=request_id,
             )
             raise VoiceProviderError(
-                f"voice provider returned unsuccessful in {phase}: "
-                f"{result.error or 'unknown'}",
+                f"voice provider returned unsuccessful in {phase}: " f"{result.error or 'unknown'}",
                 provider_error=result.error,
             )
         return result
@@ -450,28 +512,19 @@ class VoiceProcessingService:
         if audio_base64 is not None:
             b64_clean = str(audio_base64).strip() or None
         if url_clean is None and b64_clean is None:
-            raise InvalidAudioError(
-                "audio_url or audio_base64 is required"
-            )
+            raise InvalidAudioError("audio_url or audio_base64 is required")
         if url_clean is not None and len(url_clean) > MAX_AUDIO_URL_LENGTH:
-            raise InvalidAudioError(
-                f"audio_url must be at most {MAX_AUDIO_URL_LENGTH} characters"
-            )
+            raise InvalidAudioError(f"audio_url must be at most {MAX_AUDIO_URL_LENGTH} characters")
         if url_clean is not None and not (
-            url_clean.lower().startswith("http://")
-            or url_clean.lower().startswith("https://")
+            url_clean.lower().startswith("http://") or url_clean.lower().startswith("https://")
         ):
-            raise InvalidAudioError(
-                "audio_url must be an absolute http(s) URL"
-            )
+            raise InvalidAudioError("audio_url must be an absolute http(s) URL")
         if b64_clean is not None:
             # Each 4 base64 chars encode 3 bytes — over-approximate to keep
             # the maths simple; we only need a hard upper bound here.
             approx_bytes = (len(b64_clean) // 4) * 3
             if approx_bytes > MAX_AUDIO_BYTES:
-                raise InvalidAudioError(
-                    f"audio payload must be at most {MAX_AUDIO_BYTES} bytes"
-                )
+                raise InvalidAudioError(f"audio payload must be at most {MAX_AUDIO_BYTES} bytes")
         return url_clean, b64_clean
 
     @staticmethod
@@ -482,9 +535,7 @@ class VoiceProcessingService:
         if not clean:
             return None
         if len(clean) > MAX_LANGUAGE_LENGTH:
-            raise InvalidAudioError(
-                f"language must be at most {MAX_LANGUAGE_LENGTH} characters"
-            )
+            raise InvalidAudioError(f"language must be at most {MAX_LANGUAGE_LENGTH} characters")
         return clean
 
     @staticmethod
@@ -504,9 +555,7 @@ class VoiceProcessingService:
         return num
 
     @staticmethod
-    def _validate_reply_prompt(
-        value: str | None, *, synthesize_reply: bool
-    ) -> str | None:
+    def _validate_reply_prompt(value: str | None, *, synthesize_reply: bool) -> str | None:
         if value is None:
             return None
         clean = str(value).strip()
@@ -519,9 +568,7 @@ class VoiceProcessingService:
         if not synthesize_reply:
             # Reject the silent footgun: caller passed a prompt but forgot
             # to enable synthesis — surface it instead of dropping the prompt.
-            raise InvalidVoicePromptError(
-                "reply_prompt requires synthesize_reply=True"
-            )
+            raise InvalidVoicePromptError("reply_prompt requires synthesize_reply=True")
         return clean
 
     @staticmethod
@@ -530,9 +577,7 @@ class VoiceProcessingService:
             return DEFAULT_VOICE
         clean = str(value).strip()
         if len(clean) > MAX_VOICE_LENGTH:
-            raise InvalidVoicePromptError(
-                f"voice must be at most {MAX_VOICE_LENGTH} characters"
-            )
+            raise InvalidVoicePromptError(f"voice must be at most {MAX_VOICE_LENGTH} characters")
         return clean
 
 

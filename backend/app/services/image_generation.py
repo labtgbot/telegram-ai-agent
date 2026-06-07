@@ -3,16 +3,14 @@
 Orchestrates a single image-generation request end-to-end:
 
 1.  Validate the request shape (quality, aspect ratio, prompt length).
-2.  Pre-check the user's token balance against the per-quality cost so
-    the caller learns about insufficient funds *before* we burn a
-    Composio call.
+2.  Atomically debit the per-quality cost before invoking the provider
+    so surplus concurrent requests cannot burn upstream spend.
 3.  Invoke the Composio ``image_gen`` toolkit (or whichever provider
     ``service_type='image'`` resolves to — operators can override via
     admin settings).
-4.  On success, atomically debit the cost via :class:`TokenService.spend`
-    and record a structured row in ``token_usage_logs``; on failure,
-    insert an audit-only row (no debit) so admins can see the error in
-    the usage history.
+4.  On success, attach provider metadata to the structured
+    ``token_usage_logs`` row; on failure, refund the debit and insert an
+    audit-only row so admins can see the error in the usage history.
 
 Both the HTTP endpoint (``POST /api/v1/generate/image``) and the bot
 command (``/image``) call into this service so the cost model, the
@@ -21,6 +19,7 @@ flushes its writes but does **not** commit — the caller controls the
 outer transaction, matching the pattern used by every other service in
 ``app.services``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -36,11 +35,7 @@ from app.services.composio import (
     ToolResult,
     log_invocation,
 )
-from app.services.token_service import (
-    InsufficientTokensError,
-    TokenService,
-    UserNotFoundError,
-)
+from app.services.token_service import TokenService
 
 logger = get_logger(__name__)
 
@@ -175,8 +170,6 @@ class ImageGenerationService:
         negative_clean = self._validate_negative_prompt(negative_prompt)
         cost = QUALITY_COST[quality_clean]
 
-        await self._assert_balance_sufficient(user_id, cost)
-
         request_params: dict[str, Any] = {
             "prompt": prompt_clean,
             "quality": quality_clean,
@@ -187,15 +180,36 @@ class ImageGenerationService:
 
         provider_params: dict[str, Any] = dict(request_params)
 
-        result = await self._invoke_provider(
+        spend = await self._tokens.spend(
             user_id=user_id,
-            params=provider_params,
-            request_id=request_id,
-            composio_user_id=composio_user_id,
+            amount=cost,
+            service=SERVICE_TYPE,
+            request_params=request_params,
+            response_status="pending",
         )
+
+        try:
+            result = await self._invoke_provider(
+                user_id=user_id,
+                params=provider_params,
+                request_id=request_id,
+                composio_user_id=composio_user_id,
+            )
+        except ImageProviderError:
+            await self._refund_spend(
+                user_id=user_id,
+                transaction_id=spend.transaction_id,
+                reason="image provider failed",
+            )
+            raise
 
         url = self._extract_url(result)
         if url is None:
+            await self._refund_spend(
+                user_id=user_id,
+                transaction_id=spend.transaction_id,
+                reason="image provider returned empty result",
+            )
             # Audit the failure (zero-cost row) so it surfaces in usage history.
             await log_invocation(
                 self.session,
@@ -209,15 +223,10 @@ class ImageGenerationService:
                 provider_error=result.error,
             )
 
-        spend = await self._tokens.spend(
+        await self._record_spend_result(
             user_id=user_id,
-            amount=cost,
-            service=SERVICE_TYPE,
-            request_params=request_params,
-            response_status="ok",
-            processing_time_ms=result.latency_ms,
-            composio_tool=result.tool,
-            mcp_server=result.mcp_server,
+            usage_log_id=spend.usage_log_id,
+            result=result,
         )
 
         logger.info(
@@ -253,21 +262,49 @@ class ImageGenerationService:
 
     # -------------------------------------------------------------- internal
 
-    async def _assert_balance_sufficient(self, user_id: int, cost: int) -> None:
-        """Pre-flight balance check.
-
-        Reading the balance without a row lock here is intentional —
-        the authoritative check happens inside :meth:`TokenService.spend`
-        under ``SELECT ... FOR UPDATE``.  This early probe just lets us
-        skip the (paid, slow) Composio call when the user can't afford
-        the request.
-        """
+    async def _record_spend_result(
+        self,
+        *,
+        user_id: int,
+        usage_log_id: int,
+        result: ToolResult,
+    ) -> None:
         try:
-            balance = await self._tokens.get_balance(user_id)
-        except UserNotFoundError:
-            raise
-        if balance < cost:
-            raise InsufficientTokensError(required=cost, available=balance)
+            await self._tokens.record_spend_result(
+                usage_log_id=usage_log_id,
+                response_status="ok",
+                processing_time_ms=result.latency_ms,
+                composio_tool=result.tool,
+                mcp_server=result.mcp_server,
+            )
+        except Exception as exc:  # noqa: BLE001 — audit metadata is best-effort
+            logger.warning(
+                "image.spend_usage_update_failed",
+                user_id=user_id,
+                usage_log_id=usage_log_id,
+                error=str(exc),
+            )
+
+    async def _refund_spend(
+        self,
+        *,
+        user_id: int,
+        transaction_id: int,
+        reason: str,
+    ) -> None:
+        try:
+            await self._tokens.refund(
+                transaction_id=transaction_id,
+                reason=reason[:100],
+            )
+        except Exception as exc:  # noqa: BLE001 — preserve the provider error
+            logger.warning(
+                "image.refund_failed",
+                user_id=user_id,
+                transaction_id=transaction_id,
+                reason=reason,
+                error=str(exc),
+            )
 
     async def _invoke_provider(
         self,
@@ -346,9 +383,7 @@ class ImageGenerationService:
         if not clean:
             raise InvalidPromptError("prompt is required")
         if len(clean) > MAX_PROMPT_LENGTH:
-            raise InvalidPromptError(
-                f"prompt must be at most {MAX_PROMPT_LENGTH} characters"
-            )
+            raise InvalidPromptError(f"prompt must be at most {MAX_PROMPT_LENGTH} characters")
         return clean
 
     @staticmethod
@@ -360,8 +395,7 @@ class ImageGenerationService:
             return None
         if len(clean) > MAX_NEGATIVE_PROMPT_LENGTH:
             raise InvalidPromptError(
-                f"negative_prompt must be at most {MAX_NEGATIVE_PROMPT_LENGTH} "
-                "characters"
+                f"negative_prompt must be at most {MAX_NEGATIVE_PROMPT_LENGTH} " "characters"
             )
         return clean
 
@@ -371,9 +405,7 @@ class ImageGenerationService:
             raise InvalidQualityError("quality is required")
         clean = str(quality).strip().lower()
         if clean not in SUPPORTED_QUALITIES:
-            raise InvalidQualityError(
-                f"quality must be one of {sorted(SUPPORTED_QUALITIES)}"
-            )
+            raise InvalidQualityError(f"quality must be one of {sorted(SUPPORTED_QUALITIES)}")
         return clean
 
     @staticmethod

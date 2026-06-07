@@ -10,8 +10,8 @@ Coverage:
   ``SERVICE_TYPE`` constant match the issue spec;
 * validation of ``prompt`` / ``system_prompt`` / ``mode`` /
   ``temperature`` / ``max_tokens`` (boundaries + invalid types);
-* pre-flight balance check surfaces :class:`InsufficientTokensError`
-  *before* any provider call;
+* debit-first accounting surfaces :class:`InsufficientTokensError`
+  before any provider call;
 * per-mode toolkit override resolves to the right Composio tool;
 * response-text extraction across the assorted Composio response shapes
   (``text``, ``output_text``, ``message.content``,
@@ -25,6 +25,7 @@ Coverage:
 * :meth:`iter_generate` produces ``delta`` chunks followed by a single
   ``final`` chunk carrying the :class:`TextGenerationResult`.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -71,6 +72,7 @@ from app.services.text_generation import (
 from app.services.token_service import (
     InsufficientTokensError,
     SpendResult,
+    TokenOperationResult,
     UserNotFoundError,
 )
 
@@ -79,6 +81,8 @@ from app.services.token_service import (
 
 @dataclass
 class _RecordedSpend:
+    transaction_id: int
+    usage_log_id: int
     user_id: int
     amount: int
     service: str
@@ -89,12 +93,19 @@ class _RecordedSpend:
     mcp_server: str | None
 
 
+@dataclass
+class _RecordedRefund:
+    transaction_id: int
+    reason: str | None
+
+
 class _FakeTokenService:
     """Stand-in for :class:`TokenService` that doesn't touch a DB."""
 
     def __init__(self, *, balances: dict[int, int] | None = None) -> None:
         self.balances: dict[int, int] = dict(balances or {})
         self.spends: list[_RecordedSpend] = []
+        self.refunds: list[_RecordedRefund] = []
         self.balance_calls: list[int] = []
         self._next_tx = 1000
         self._next_log = 5000
@@ -123,8 +134,14 @@ class _FakeTokenService:
         if current < amount:
             raise InsufficientTokensError(required=amount, available=current)
         self.balances[user_id] = current - amount
+        self._next_tx += 1
+        self._next_log += 1
+        transaction_id = self._next_tx
+        usage_log_id = self._next_log
         self.spends.append(
             _RecordedSpend(
+                transaction_id=transaction_id,
+                usage_log_id=usage_log_id,
                 user_id=user_id,
                 amount=amount,
                 service=service,
@@ -135,15 +152,53 @@ class _FakeTokenService:
                 mcp_server=mcp_server,
             )
         )
-        self._next_tx += 1
-        self._next_log += 1
         return SpendResult(
             user_id=user_id,
             amount=amount,
             new_balance=self.balances[user_id],
-            transaction_id=self._next_tx,
+            transaction_id=transaction_id,
             transaction_type="spend",
-            usage_log_id=self._next_log,
+            usage_log_id=usage_log_id,
+        )
+
+    async def record_spend_result(
+        self,
+        *,
+        usage_log_id: int,
+        response_status: str | None,
+        processing_time_ms: int | None = None,
+        composio_tool: str | None = None,
+        mcp_server: str | None = None,
+        request_params: dict[str, Any] | None = None,
+    ) -> None:
+        spend = next((s for s in self.spends if s.usage_log_id == usage_log_id), None)
+        if spend is None:
+            return
+        spend.response_status = response_status
+        spend.processing_time_ms = processing_time_ms
+        spend.composio_tool = composio_tool
+        spend.mcp_server = mcp_server
+        if request_params is not None:
+            spend.request_params = dict(request_params)
+
+    async def refund(
+        self,
+        *,
+        transaction_id: int,
+        reason: str | None = None,
+    ) -> TokenOperationResult:
+        self.refunds.append(_RecordedRefund(transaction_id=transaction_id, reason=reason))
+        spend = next((s for s in self.spends if s.transaction_id == transaction_id), None)
+        if spend is None:
+            raise RuntimeError("no matching spend to refund in fake service")
+        self.balances[spend.user_id] += spend.amount
+        self._next_tx += 1
+        return TokenOperationResult(
+            user_id=spend.user_id,
+            amount=spend.amount,
+            new_balance=self.balances[spend.user_id],
+            transaction_id=self._next_tx,
+            transaction_type="refund",
         )
 
 
@@ -179,15 +234,11 @@ class _FakeHistory:
         self.loads.append((user_id, thread_id))
         return list(self.initial)
 
-    async def replace(
-        self, user_id: int, thread_id: str, turns: list[ChatTurn]
-    ) -> None:
+    async def replace(self, user_id: int, thread_id: str, turns: list[ChatTurn]) -> None:
         self.replaces.append((user_id, thread_id, list(turns)))
         self.initial = list(turns)
 
-    async def append(
-        self, user_id: int, thread_id: str, turns: list[ChatTurn]
-    ) -> None:
+    async def append(self, user_id: int, thread_id: str, turns: list[ChatTurn]) -> None:
         self.appends.append((user_id, thread_id, list(turns)))
         self.initial = list(self.initial) + list(turns)
 
@@ -292,9 +343,7 @@ async def test_rejects_overlong_prompt(
 ) -> None:
     service = _build_service(fake_session, composio_mock, fake_tokens)
     with pytest.raises(InvalidPromptError):
-        await service.generate(
-            user_id=42, prompt="a" * (MAX_PROMPT_LENGTH + 1)
-        )
+        await service.generate(user_id=42, prompt="a" * (MAX_PROMPT_LENGTH + 1))
 
 
 @pytest.mark.asyncio
@@ -333,15 +382,11 @@ async def test_rejects_out_of_range_temperature(
 ) -> None:
     service = _build_service(fake_session, composio_mock, fake_tokens)
     with pytest.raises(InvalidTemperatureError):
-        await service.generate(
-            user_id=42, prompt="hi", temperature=bad_value
-        )
+        await service.generate(user_id=42, prompt="hi", temperature=bad_value)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "bad_value", [MIN_MAX_TOKENS - 1, MAX_MAX_TOKENS + 1, "lots"]
-)
+@pytest.mark.parametrize("bad_value", [MIN_MAX_TOKENS - 1, MAX_MAX_TOKENS + 1, "lots"])
 async def test_rejects_out_of_range_max_tokens(
     fake_session: _FakeSession,
     composio_mock: MockComposioClient,
@@ -350,9 +395,7 @@ async def test_rejects_out_of_range_max_tokens(
 ) -> None:
     service = _build_service(fake_session, composio_mock, fake_tokens)
     with pytest.raises(InvalidMaxTokensError):
-        await service.generate(
-            user_id=42, prompt="hi", max_tokens=bad_value
-        )
+        await service.generate(user_id=42, prompt="hi", max_tokens=bad_value)
 
 
 # ------------------------------------------------------------- happy path
@@ -596,8 +639,9 @@ async def test_provider_error_is_translated_and_does_not_debit(
         await service.generate(user_id=42, prompt="hi")
     assert "text provider call failed" in str(exc.value)
     assert exc.value.provider_error is not None
-    # Balance untouched, no spend recorded.
-    assert fake_tokens.spends == []
+    # Balance returns to its original value after the refund.
+    assert len(fake_tokens.spends) == 1
+    assert len(fake_tokens.refunds) == 1
     assert fake_tokens.balances[42] == 500
 
 
@@ -618,7 +662,9 @@ async def test_unsuccessful_provider_response_is_translated(
     with pytest.raises(TextProviderError) as exc:
         await service.generate(user_id=42, prompt="hi")
     assert exc.value.provider_error == "moderation_blocked"
-    assert fake_tokens.spends == []
+    assert len(fake_tokens.spends) == 1
+    assert len(fake_tokens.refunds) == 1
+    assert fake_tokens.balances[42] == 500
 
 
 @pytest.mark.asyncio
@@ -637,8 +683,9 @@ async def test_empty_response_audits_failure_and_raises(
     # so the audit row should be present in our fake session.
     assert len(fake_session.added) >= 1
     assert fake_session.flushes >= 1
-    # No tokens spent — the failure path must not debit.
-    assert fake_tokens.spends == []
+    # The debit is refunded, so the failure path has no net charge.
+    assert len(fake_tokens.spends) == 1
+    assert len(fake_tokens.refunds) == 1
     assert fake_tokens.balances[42] == 500
 
 
@@ -660,9 +707,7 @@ async def test_history_load_save_round_trip(
             ChatTurn(role=ROLE_ASSISTANT, content="first answer"),
         ]
     )
-    service = _build_service(
-        fake_session, composio_mock, fake_tokens, history=history
-    )
+    service = _build_service(fake_session, composio_mock, fake_tokens, history=history)
 
     outcome = await service.generate(
         user_id=42,
@@ -726,12 +771,8 @@ async def test_history_load_failure_is_swallowed(
         async def delete(self, *_a: Any, **_k: Any) -> None:
             return None
 
-    service = _build_service(
-        fake_session, composio_mock, fake_tokens, history=_BrokenHistory()
-    )
-    outcome = await service.generate(
-        user_id=42, prompt="hi", thread_id="t-1"
-    )
+    service = _build_service(fake_session, composio_mock, fake_tokens, history=_BrokenHistory())
+    outcome = await service.generate(user_id=42, prompt="hi", thread_id="t-1")
     assert outcome.text == "ok"
     # The provider still saw the prompt even though history failed to load.
     messages = composio_mock.calls[0].params["messages"]
@@ -746,9 +787,7 @@ async def test_history_disabled_without_thread_id(
     composio_mock = MockComposioClient()
     composio_mock.set_response("gemini", data={"text": "ok"})
     history = _FakeHistory()
-    service = _build_service(
-        fake_session, composio_mock, fake_tokens, history=history
-    )
+    service = _build_service(fake_session, composio_mock, fake_tokens, history=history)
 
     await service.generate(user_id=42, prompt="hi")  # no thread_id
 
