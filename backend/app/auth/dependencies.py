@@ -156,4 +156,6 @@ async def get_current_user_from_init_data(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="user_banned",
         )
+    request.state.user = user
+    request.state.user_id = user.id
     return user
