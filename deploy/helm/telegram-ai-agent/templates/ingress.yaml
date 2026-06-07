@@ -1,29 +1,33 @@
-{{- if .Values.ingress.enabled }}
+{{- define "telegram-ai-agent.ingressResource" -}}
+{{- $ctx := .ctx -}}
+{{- $annotations := dict -}}
+{{- if $ctx.Values.ingress.tls.enabled -}}
+{{- $_ := set $annotations "cert-manager.io/cluster-issuer" $ctx.Values.clusterIssuer -}}
+{{- end -}}
+{{- $annotations = mergeOverwrite $annotations ($ctx.Values.ingress.annotations | default dict) -}}
+{{- $annotations = mergeOverwrite $annotations (.annotations | default dict) -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "telegram-ai-agent.fullname" . }}
+  name: {{ .name }}
   labels:
-    {{- include "telegram-ai-agent.labels" . | nindent 4 }}
+    {{- include "telegram-ai-agent.labels" $ctx | nindent 4 }}
+  {{- if $annotations }}
   annotations:
-    {{- if .Values.ingress.tls.enabled }}
-    cert-manager.io/cluster-issuer: {{ .Values.clusterIssuer | quote }}
-    {{- end }}
-    {{- with .Values.ingress.annotations }}
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
+    {{- toYaml $annotations | nindent 4 }}
+  {{- end }}
 spec:
-  ingressClassName: {{ include "telegram-ai-agent.ingressClassName" . }}
-  {{- if .Values.ingress.tls.enabled }}
+  ingressClassName: {{ include "telegram-ai-agent.ingressClassName" $ctx }}
+  {{- if $ctx.Values.ingress.tls.enabled }}
   tls:
-    {{- range .Values.ingress.hosts }}
+    {{- range .hosts }}
     - hosts:
         - {{ .host | quote }}
-      secretName: {{ default (printf "%s-tls" .host) $.Values.ingress.tls.secretName }}
+      secretName: {{ default (printf "%s-tls" .host) $ctx.Values.ingress.tls.secretName }}
     {{- end }}
   {{- end }}
   rules:
-    {{- range .Values.ingress.hosts }}
+    {{- range .hosts }}
     - host: {{ .host | quote }}
       http:
         paths:
@@ -33,17 +37,17 @@ spec:
             backend:
               service:
                 {{- if eq .service "backend" }}
-                name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ "name" "backend") }}
+                name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ctx "name" "backend") }}
                 port:
-                  number: {{ $.Values.backend.service.port }}
+                  number: {{ $ctx.Values.backend.service.port }}
                 {{- else if eq .service "miniApp" }}
-                name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ "name" "mini-app") }}
+                name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ctx "name" "mini-app") }}
                 port:
-                  number: {{ $.Values.miniApp.service.port }}
+                  number: {{ $ctx.Values.miniApp.service.port }}
                 {{- else if eq .service "admin" }}
-                name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ "name" "admin") }}
+                name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ctx "name" "admin") }}
                 port:
-                  number: {{ $.Values.admin.service.port }}
+                  number: {{ $ctx.Values.admin.service.port }}
                 {{- else }}
                 name: {{ .service }}
                 port:
@@ -51,4 +55,23 @@ spec:
                 {{- end }}
           {{- end }}
     {{- end }}
+{{- end -}}
+
+{{- if .Values.ingress.enabled }}
+{{- $ctx := . }}
+{{- $sharedHosts := list }}
+{{- range .Values.ingress.hosts }}
+{{- if not .annotations }}
+{{- $sharedHosts = append $sharedHosts . }}
+{{- end }}
+{{- end }}
+{{- if $sharedHosts }}
+{{- include "telegram-ai-agent.ingressResource" (dict "ctx" $ctx "name" (include "telegram-ai-agent.fullname" $ctx) "hosts" $sharedHosts) }}
+{{- end }}
+{{- range $host := .Values.ingress.hosts }}
+{{- with $host.annotations }}
+---
+{{ include "telegram-ai-agent.ingressResource" (dict "ctx" $ctx "name" (include "telegram-ai-agent.ingressHostName" (dict "ctx" $ctx "host" $host.host)) "hosts" (list $host) "annotations" .) }}
+{{- end }}
+{{- end }}
 {{- end }}

@@ -104,6 +104,16 @@ Ingress className with fallback.
 {{- end -}}
 
 {{/*
+Host-specific ingress resource name.
+*/}}
+{{- define "telegram-ai-agent.ingressHostName" -}}
+{{- $ctx := .ctx -}}
+{{- $safeHost := regexReplaceAll "[^a-z0-9-]+" (lower .host) "-" -}}
+{{- $safeHost = trimAll "-" $safeHost -}}
+{{- printf "%s-%s" (include "telegram-ai-agent.fullname" $ctx) $safeHost | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/*
 ServiceAccount name for backend.
 */}}
 {{- define "telegram-ai-agent.backend.serviceAccountName" -}}

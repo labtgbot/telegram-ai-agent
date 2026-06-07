@@ -244,6 +244,10 @@ ingress:
           pathType: Prefix
           service: miniApp
     - host: admin.example.com
+      # Optional per-host annotations render this host as a separate Ingress.
+      # Use this for controls such as source IP allowlists that must not apply
+      # to the public bot/mini-app host.
+      annotations: {}
       paths:
         - path: /
           pathType: Prefix
