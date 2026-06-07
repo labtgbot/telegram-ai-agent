@@ -158,6 +158,28 @@ worker:
     targetCPUUtilizationPercentage: 70
 
 # -----------------------------------------------------------------------------
+# token_usage_logs partition maintenance.
+# -----------------------------------------------------------------------------
+tokenUsagePartitions:
+  enabled: true
+  # Run before month-end; the worker creates the current month and the next N
+  # months, while the DEFAULT partition remains as a safety net.
+  schedule: "0 3 25 * *"
+  monthsAhead: 6
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  startingDeadlineSeconds: 86400
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+# -----------------------------------------------------------------------------
 # Mini App (React static bundle served by nginx).
 # -----------------------------------------------------------------------------
 miniApp:

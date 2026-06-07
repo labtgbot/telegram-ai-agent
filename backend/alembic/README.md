@@ -29,6 +29,7 @@ alembic downgrade -1
 ## Partitioning
 
 Таблица `token_usage_logs` партиционирована `PARTITION BY RANGE (created_at)`.
-Baseline-миграция создаёт партицию-«предохранитель» (DEFAULT) и две стартовые
-ежемесячные партиции. Новые партиции создаются ежемесячным заданием
-(Celery beat / отдельная миграция) — см. ADR-0005 §Partitioning.
+Миграции создают партицию-«предохранитель» (DEFAULT) и стартовое окно
+ежемесячных партиций. Новые партиции создаются ежемесячным заданием
+`python -m app.workers.token_usage_partitions` (cron / k8s CronJob /
+Celery beat) — см. ADR-0005 §Partitioning.

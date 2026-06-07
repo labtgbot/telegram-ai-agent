@@ -94,9 +94,10 @@ fewer `prepare`/`describe` cycles per request in `pg_stat_statements`.
 ### Partitioning — `token_usage_logs`
 
 `token_usage_logs` is the hottest write table; it is partitioned `BY
-RANGE (created_at)` with a monthly partition cadence. The migration
-under `backend/alembic/versions/` provisions the partition function and
-the rolling-window helper used by the daily housekeeping job.
+RANGE (created_at)` with a monthly partition cadence. The migrations
+under `backend/alembic/versions/` provision the initial window plus a
+DEFAULT safety partition; `python -m app.workers.token_usage_partitions`
+maintains the rolling window from cron, Kubernetes CronJob, or Celery beat.
 
 * Reads narrowed by `created_at` skip partition scans automatically.
 * Old partitions can be detached (`DETACH PARTITION`) and dropped for

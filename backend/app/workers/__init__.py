@@ -26,6 +26,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from app.workers.daily_analytics import run_daily_analytics
     from app.workers.subscriptions import run_subscription_renewals
+    from app.workers.token_usage_partitions import (
+        run_token_usage_partition_maintenance,
+    )
     from app.workers.video_polling import (
         run_video_polling_loop,
         run_video_polling_pass,
@@ -34,6 +37,7 @@ if TYPE_CHECKING:
 __all__ = [
     "run_daily_analytics",
     "run_subscription_renewals",
+    "run_token_usage_partition_maintenance",
     "run_video_polling_loop",
     "run_video_polling_pass",
 ]
@@ -41,6 +45,10 @@ __all__ = [
 _LAZY: dict[str, tuple[str, str]] = {
     "run_daily_analytics": ("app.workers.daily_analytics", "run_daily_analytics"),
     "run_subscription_renewals": ("app.workers.subscriptions", "run_subscription_renewals"),
+    "run_token_usage_partition_maintenance": (
+        "app.workers.token_usage_partitions",
+        "run_token_usage_partition_maintenance",
+    ),
     "run_video_polling_pass": ("app.workers.video_polling", "run_video_polling_pass"),
     "run_video_polling_loop": ("app.workers.video_polling", "run_video_polling_loop"),
 }

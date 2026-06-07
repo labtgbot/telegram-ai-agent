@@ -93,6 +93,25 @@ def test_partitions_exist_after_upgrade(database_url):
     )
 
 
+def test_default_partition_exists_after_upgrade(database_url):
+    engine = create_engine(_sync_url(database_url), future=True)
+    with engine.connect() as conn:
+        result = conn.execute(
+            text(
+                """
+                SELECT count(*)
+                FROM pg_inherits
+                JOIN pg_class child ON child.oid = pg_inherits.inhrelid
+                WHERE inhparent = 'token_usage_logs'::regclass
+                  AND pg_get_expr(child.relpartbound, child.oid) = 'DEFAULT'
+                """
+            )
+        )
+        default_count = result.scalar_one()
+    engine.dispose()
+    assert default_count == 1
+
+
 @pytest.mark.parametrize(
     "index_name",
     [
