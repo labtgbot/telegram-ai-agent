@@ -34,6 +34,7 @@ from app.core.logging import get_logger
 from app.models.account_deletion import (
     DELETION_STATUS_CANCELLED,
     DELETION_STATUS_COMPLETED,
+    DELETION_STATUS_FAILED,
     DELETION_STATUS_PENDING,
     AccountDeletionRequest,
 )
@@ -284,4 +285,29 @@ async def mark_deletion_completed(
     now_utc = now or datetime.now(UTC)
     request.status = DELETION_STATUS_COMPLETED
     request.completed_at = now_utc
+    await session.flush()
+
+
+async def mark_deletion_failed(
+    session: AsyncSession,
+    *,
+    request_id: int,
+    failure_reason: str,
+    now: datetime | None = None,
+) -> None:
+    """Persist a worker failure for a pending deletion request."""
+    now_utc = now or datetime.now(UTC)
+    await session.execute(
+        update(AccountDeletionRequest)
+        .where(
+            AccountDeletionRequest.id == request_id,
+            AccountDeletionRequest.status == DELETION_STATUS_PENDING,
+        )
+        .values(
+            status=DELETION_STATUS_FAILED,
+            failed_at=now_utc,
+            failure_reason=failure_reason,
+        )
+        .execution_options(synchronize_session=False)
+    )
     await session.flush()

@@ -23,6 +23,7 @@ from app.models import (
 from app.models.account_deletion import (
     DELETION_STATUS_CANCELLED,
     DELETION_STATUS_COMPLETED,
+    DELETION_STATUS_FAILED,
     DELETION_STATUS_PENDING,
 )
 from app.services.account_deletion import (
@@ -35,6 +36,7 @@ from app.services.account_deletion import (
     get_pending_deletion,
     list_due_deletions,
     mark_deletion_completed,
+    mark_deletion_failed,
     request_account_deletion,
 )
 
@@ -242,6 +244,39 @@ async def test_mark_completed_flips_status(db_session):
     await db_session.flush()
     assert pending.status == DELETION_STATUS_COMPLETED
     assert pending.completed_at == now
+
+
+@pytest.mark.asyncio
+async def test_mark_failed_records_status_and_failure_reason(db_session):
+    user = await _make_user(db_session, telegram_id=900_041, code="GDPR-041")
+    result = await request_account_deletion(
+        db_session,
+        user=user,
+        reason="requested by user",
+    )
+
+    now = datetime(2026, 7, 2, tzinfo=UTC)
+    await mark_deletion_failed(
+        db_session,
+        request_id=result.request_id,
+        failure_reason="RuntimeError: simulated db error",
+        now=now,
+    )
+    await db_session.flush()
+
+    from sqlalchemy import select
+
+    record = (
+        await db_session.execute(
+            select(AccountDeletionRequest).where(
+                AccountDeletionRequest.id == result.request_id
+            )
+        )
+    ).scalar_one()
+    assert record.status == DELETION_STATUS_FAILED
+    assert record.failed_at == now
+    assert record.reason == "requested by user"
+    assert record.failure_reason == "RuntimeError: simulated db error"
 
 
 @pytest.mark.asyncio
