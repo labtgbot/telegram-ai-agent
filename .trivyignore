@@ -13,7 +13,8 @@
 
 # ---------------------------------------------------------------------------
 # F-006 — admin-dashboard pinned to next@14.2.35 (Phase 4.x upgrade planned).
-# Mitigated by ingress IP-allowlist + CSP nonces. See audit-report.md § F-006.
+# Mitigated by production admin ingress IP-allowlist + CSP nonces.
+# See audit-report.md § F-006.
 # ---------------------------------------------------------------------------
 CVE-2026-44573
 CVE-2026-44578
