@@ -2,10 +2,12 @@
 
 Telegram POSTs every update to ``POST /api/v1/bot/webhook``.  We verify the
 ``X-Telegram-Bot-Api-Secret-Token`` header (set when registering the webhook
-via ``setWebhook``) before dispatching, then always return ``200 OK`` — even
-if the handler raised — so Telegram won't retry the same update in a tight
-loop.
+via ``setWebhook``) and claim the Telegram ``update_id`` in Redis before
+dispatching. Duplicate updates and handler failures return ``200 OK`` so
+Telegram does not re-run non-idempotent side effects; an unavailable
+idempotency store returns ``503`` before dispatch so Telegram can retry later.
 """
+
 from __future__ import annotations
 
 import hmac
@@ -13,15 +15,19 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from pydantic import BaseModel
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
 
 from app.api.v1.generate import ComposioClientDep
 from app.auth.dependencies import SessionDep, SettingsDep
 from app.bot.client import TelegramClient
 from app.bot.dispatcher import dispatch_update
 from app.core.logging import get_logger
+from app.core.redis import get_redis
 
 router = APIRouter(prefix="/bot", tags=["bot"])
 logger = get_logger(__name__)
+UPDATE_IDEMPOTENCY_KEY_PREFIX = "bot:webhook:update"
 
 
 class WebhookAck(BaseModel):
@@ -66,6 +72,13 @@ def reset_bot_client() -> None:
 BotClientDep = Annotated[TelegramClient, Depends(get_bot_client)]
 
 
+def _redis_dep() -> Redis:
+    return get_redis()
+
+
+RedisDep = Annotated[Redis, Depends(_redis_dep)]
+
+
 def _check_secret(expected: str, received: str | None) -> None:
     if not expected:
         return  # secret disabled in this environment
@@ -74,6 +87,23 @@ def _check_secret(expected: str, received: str | None) -> None:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid_webhook_secret",
         )
+
+
+def _coerce_update_id(raw: Any) -> int | None:
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    return None
+
+
+def _update_idempotency_key(update_id: int) -> str:
+    return f"{UPDATE_IDEMPOTENCY_KEY_PREFIX}:{update_id}"
+
+
+async def _claim_update_id(redis: Redis, update_id: int, *, ttl_seconds: int) -> bool:
+    ttl = max(1, int(ttl_seconds))
+    return bool(await redis.set(_update_idempotency_key(update_id), "1", ex=ttl, nx=True))
 
 
 @router.post(
@@ -86,14 +116,31 @@ async def telegram_webhook(
     session: SessionDep,
     client: BotClientDep,
     composio: ComposioClientDep,
+    redis: RedisDep,
     update: dict[str, Any],
     x_telegram_bot_api_secret_token: Annotated[str | None, Header()] = None,
 ) -> WebhookAck:
     """Receive a Telegram Update and dispatch it."""
     _check_secret(settings.telegram_webhook_secret, x_telegram_bot_api_secret_token)
 
-    update_id = update.get("update_id")
+    update_id = _coerce_update_id(update.get("update_id"))
     logger.info("bot.webhook.received", update_id=update_id)
+    if update_id is not None:
+        try:
+            claimed = await _claim_update_id(
+                redis,
+                update_id,
+                ttl_seconds=settings.telegram_update_idempotency_ttl_seconds,
+            )
+        except RedisError as exc:
+            logger.exception("bot.webhook.idempotency_failed", update_id=update_id, error=str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="idempotency_store_unavailable",
+            ) from exc
+        if not claimed:
+            logger.info("bot.webhook.duplicate", update_id=update_id)
+            return WebhookAck()
 
     try:
         await dispatch_update(

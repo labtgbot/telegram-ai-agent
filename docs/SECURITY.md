@@ -123,6 +123,9 @@ RBAC: `super_admin > support_admin > analyst > user > banned`.
 ## Telegram Bot Security
 
 - Webhook secret token валидируется на каждом запросе.
+- `update_id` каждого обработанного webhook сохраняется в Redis через
+  `SET NX` с TTL `TELEGRAM_UPDATE_IDEMPOTENCY_TTL_SECONDS`; повторная доставка
+  того же update возвращает `200 OK` без повторного запуска handler-ов.
 - Ограничение по типам контента (антиспам, антифишинг).
 - Anti-flood защита на уровне Telegram + Redis.
 
@@ -139,6 +142,7 @@ RBAC: `super_admin > support_admin > analyst > user > banned`.
 |------------|--------------|-----------|
 | `TELEGRAM_BOT_TOKEN` | — | Источник HMAC-секрета для `initData`. |
 | `TELEGRAM_INIT_DATA_MAX_AGE` | `86400` | Максимальный возраст `auth_date` (сек). |
+| `TELEGRAM_UPDATE_IDEMPOTENCY_TTL_SECONDS` | `604800` | TTL Redis-ключей для дедупликации webhook `update_id` (сек). |
 | `ADMIN_JWT_SECRET` | `change-me` | Секрет HS256 для admin JWT. |
 | `ADMIN_JWT_ALGORITHM` | `HS256` | Алгоритм подписи JWT. |
 | `ADMIN_ACCESS_TOKEN_TTL` | `900` | TTL access-токена (сек). |
