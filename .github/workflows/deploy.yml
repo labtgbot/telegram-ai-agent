@@ -155,9 +155,15 @@ jobs:
       - name: docker compose config
         env:
           POSTGRES_PASSWORD: ci-placeholder
+          REDIS_PASSWORD: ci-placeholder
           DOMAIN: bot.example.com
           ADMIN_DOMAIN: admin.example.com
           ACME_EMAIL: ci@example.com
+          CADDY_DATA_DIR: /tmp/tgai-caddy/data
+          CADDY_CONFIG_DIR: /tmp/tgai-caddy/config
+          BACKEND_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/backend:0.0.0-ci
+          MINI_APP_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/mini-app:0.0.0-ci
+          ADMIN_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/admin:0.0.0-ci
         run: |
           touch .env.prod
           docker compose -f docker/compose.prod.yml --env-file .env.prod config > /tmp/compose.prod.json
@@ -191,9 +197,15 @@ jobs:
       - name: docker compose config (compose.prod.yml + compose.backup.yml)
         env:
           POSTGRES_PASSWORD: ci-placeholder
+          REDIS_PASSWORD: ci-placeholder
           DOMAIN: bot.example.com
           ADMIN_DOMAIN: admin.example.com
           ACME_EMAIL: ci@example.com
+          CADDY_DATA_DIR: /tmp/tgai-caddy/data
+          CADDY_CONFIG_DIR: /tmp/tgai-caddy/config
+          BACKEND_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/backend:0.0.0-ci
+          MINI_APP_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/mini-app:0.0.0-ci
+          ADMIN_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/admin:0.0.0-ci
           BACKUP_S3_BUCKET: ci-bucket
           BACKUP_S3_REGION: eu-central-1
           AWS_ACCESS_KEY_ID: ci
