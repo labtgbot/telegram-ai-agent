@@ -350,7 +350,7 @@ async def test_finalize_credits_tokens_and_upgrades_pending_row(db_session):
 
 
 @pytest.mark.asyncio
-async def test_finalize_pending_purchase_refreshes_cache_without_db(monkeypatch):
+async def test_finalize_pending_purchase_invalidates_cache_without_db(monkeypatch):
     user = User(
         id=42,
         telegram_id=9_000_010_0,
@@ -382,8 +382,8 @@ async def test_finalize_pending_purchase_refreshes_cache_without_db(monkeypatch)
             assert user_id == user.id
             return user
 
-        async def _refresh_cache(self, user_id: int, new_balance: int) -> None:
-            await self.balance_cache.set(user_id, new_balance)
+        async def _invalidate_balance_cache(self, user_id: int) -> None:
+            await self.balance_cache.invalidate(user_id)
 
         async def add(self, **_kwargs):  # noqa: ANN003
             raise AssertionError("pending purchases must not create a second row")
@@ -422,11 +422,11 @@ async def test_finalize_pending_purchase_refreshes_cache_without_db(monkeypatch)
     )
 
     assert result.new_balance == 10 + PACKAGES["basic"].tokens
-    assert await cache.get(user.id) == result.new_balance
+    assert await cache.get(user.id) is None
 
 
 @pytest.mark.asyncio
-async def test_finalize_refreshes_cached_balance_after_pending_purchase(
+async def test_finalize_invalidates_cached_balance_after_pending_purchase(
     db_session, monkeypatch
 ):
     user = await _make_user(
@@ -452,7 +452,7 @@ async def test_finalize_refreshes_cached_balance_after_pending_purchase(
     await db_session.refresh(user)
     assert result.new_balance == 10 + PACKAGES["basic"].tokens
     assert user.token_balance == result.new_balance
-    assert await cache.get(user.id) == user.token_balance
+    assert await cache.get(user.id) is None
 
 
 @pytest.mark.asyncio

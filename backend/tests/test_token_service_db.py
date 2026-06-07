@@ -24,6 +24,7 @@ from sqlalchemy import select
 
 from app.models import Transaction, User
 from app.models.token_usage_log import TokenUsageLog
+from app.services.balance_cache import BalanceCache
 from app.services.token_service import (
     InsufficientTokensError,
     InvalidAmountError,
@@ -34,6 +35,28 @@ from app.services.token_service import (
     reconcile_all_balances,
     reconcile_user_balance,
 )
+
+
+class _StubRedis:
+    """Async Redis-shaped stub used for balance cache assertions."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def get(self, name: str):
+        return self.store.get(name)
+
+    async def set(self, name: str, value, ex=None) -> bool:  # noqa: ANN001
+        self.store[name] = str(value)
+        return True
+
+    async def delete(self, *names: str) -> int:
+        removed = 0
+        for name in names:
+            if name in self.store:
+                del self.store[name]
+                removed += 1
+        return removed
 
 
 async def _make_user(session, *, telegram_id: int, code: str, balance: int = 0) -> User:
@@ -175,6 +198,69 @@ async def test_spend_at_exact_balance_succeeds(db_session):
     svc = TokenService(db_session)
     result = await svc.spend(user_id=user.id, amount=30, service="text_query")
     assert result.new_balance == 0
+
+
+@pytest.mark.asyncio
+async def test_spend_rollback_does_not_cache_uncommitted_balance(db_engine):
+    """A rolled-back spend must not leave its flushed balance in Redis."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    factory = async_sessionmaker(
+        db_engine, expire_on_commit=False, class_=AsyncSession
+    )
+    cache = BalanceCache(_StubRedis(), ttl_seconds=60)
+    user_id: int | None = None
+
+    async with factory() as setup:
+        user = User(
+            telegram_id=8_000_019,
+            username="rollback-cache",
+            referral_code="TS-SPEND-RB",
+            token_balance=200,
+        )
+        setup.add(user)
+        await setup.commit()
+        user_id = int(user.id)
+
+    try:
+        await cache.set(user_id, 200)
+        async with factory() as spend_session:
+            svc = TokenService(spend_session, cache)
+            spent = await svc.spend(
+                user_id=user_id, amount=50, service="text_query"
+            )
+            assert spent.new_balance == 150
+            assert await cache.get(user_id) is None
+            await spend_session.rollback()
+
+        async with factory() as verify:
+            stored_balance = (
+                await verify.execute(
+                    select(User.token_balance).where(User.id == user_id)
+                )
+            ).scalar_one()
+            assert stored_balance == 200
+            assert await TokenService(verify, cache).get_balance(user_id) == 200
+            assert await cache.get(user_id) == 200
+    finally:
+        if user_id is not None:
+            async with factory() as cleanup:
+                await cleanup.execute(
+                    TokenUsageLog.__table__.delete().where(
+                        TokenUsageLog.user_id == user_id
+                    )
+                )
+                await cleanup.execute(
+                    Transaction.__table__.delete().where(
+                        Transaction.user_id == user_id
+                    )
+                )
+                user = (
+                    await cleanup.execute(select(User).where(User.id == user_id))
+                ).scalar_one_or_none()
+                if user is not None:
+                    await cleanup.delete(user)
+                await cleanup.commit()
 
 
 # --------------------------------------------------------- balance / history

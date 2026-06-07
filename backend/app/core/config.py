@@ -95,8 +95,8 @@ class Settings(BaseSettings):
         default=300,
         description=(
             "Soft TTL for the Redis-cached user balance. The cache is "
-            "write-through on every TokenService mutation, so this TTL only "
-            "acts as a safety net against drift."
+            "invalidated on every TokenService mutation, so this TTL only "
+            "acts as a safety net for missed invalidations."
         ),
     )
     pricing_cache_ttl_seconds: int = Field(

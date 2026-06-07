@@ -125,18 +125,19 @@ The full set lives in `docs/DATABASE_SCHEMA.md`.
 `GET /api/v1/user/balance` and the rate-limit middleware both read
 `users.token_balance` on every authenticated request, so the row easily
 dominates the DB read budget. We cache it in Redis under
-`balance:user:{user_id}` with a write-through pattern (see
+`balance:user:{user_id}` with read-through hydration and explicit
+invalidation (see
 `app/services/balance_cache.py`):
 
 * on a read miss `TokenService.get_balance` hydrates the cache from
   `users.token_balance` so the next request serves from Redis;
 * every mutating method (`add` / `spend` / `refund` / `manual_bonus`)
-  refreshes the cache post-flush — the cache is read-only relative to
-  the DB ledger, so an empty key always forces a fresh read;
+  invalidates the cache post-flush instead of writing the in-transaction
+  balance, so an outer rollback cannot leave an uncommitted value in Redis;
 * `Settings.balance_cache_ttl_seconds` (default 300 s) is a safety net
-  against drift; explicit invalidation is the primary correctness
-  mechanism;
-* Redis errors during the cache write are swallowed and logged at
+  for missed invalidations; explicit invalidation is the primary
+  correctness mechanism;
+* Redis errors during cache invalidation are swallowed and logged at
   `WARNING` — a Redis outage cannot break a billable spend.
 
 `get_default_balance_cache()` exposes a process-wide singleton so the
