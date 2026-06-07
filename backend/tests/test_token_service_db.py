@@ -162,6 +162,42 @@ async def test_spend_debits_balance_and_writes_usage_log(db_session):
 
 
 @pytest.mark.asyncio
+async def test_record_spend_result_updates_usage_log_metadata(db_session):
+    user = await _make_user(
+        db_session, telegram_id=8_000_020, code="TS-SPEND-META", balance=200
+    )
+    svc = TokenService(db_session)
+
+    result = await svc.spend(
+        user_id=user.id,
+        amount=30,
+        service="image",
+        request_params={"prompt": "cat"},
+        response_status="pending",
+    )
+
+    await svc.record_spend_result(
+        usage_log_id=result.usage_log_id,
+        response_status="ok",
+        processing_time_ms=321,
+        composio_tool="image_gen",
+        mcp_server="composio-prod-1",
+        request_params={"prompt": "cat", "quality": "standard"},
+    )
+
+    log = (
+        await db_session.execute(
+            select(TokenUsageLog).where(TokenUsageLog.id == result.usage_log_id)
+        )
+    ).scalar_one()
+    assert log.response_status == "ok"
+    assert log.processing_time_ms == 321
+    assert log.composio_tool == "image_gen"
+    assert log.mcp_server == "composio-prod-1"
+    assert log.request_params == {"prompt": "cat", "quality": "standard"}
+
+
+@pytest.mark.asyncio
 async def test_spend_raises_insufficient_tokens_without_mutating_state(db_session):
     user = await _make_user(
         db_session, telegram_id=8_000_004, code="TS-SPEND-2", balance=10

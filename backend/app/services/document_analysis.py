@@ -11,12 +11,12 @@ A single ``analyze`` call orchestrates one document-analysis round-trip:
 1.  Validate the document reference (URL or base64), file format
     (PDF/DOCX/TXT), file size against the user-tier cap and the
     optional question.
-2.  Pre-check the user's balance against the flat 20-token price.
+2.  Atomically debit the flat 20-token price before the provider call.
 3.  Invoke the Composio ``document_parser`` toolkit.
 4.  Normalise the heterogenous payload into extracted text + summary
     and, when a question was asked, an answer.
-5.  Atomically debit the cost via :class:`TokenService.spend` and record
-    a structured row in ``token_usage_logs``.
+5.  Attach provider metadata to the structured ``token_usage_logs`` row;
+    on provider failure, refund the debit and write a zero-cost audit row.
 
 The service flushes its writes but does **not** commit — the caller
 controls the outer transaction, matching every other service in
@@ -27,6 +27,7 @@ Per issue #16 the upload cap is **10 MB for free users** and
 :data:`MAX_FILE_BYTES_FREE` / :data:`MAX_FILE_BYTES_PREMIUM` so the API
 layer can render a clear error message when a free user hits the limit.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -42,11 +43,7 @@ from app.services.composio import (
     ToolResult,
     log_invocation,
 )
-from app.services.token_service import (
-    InsufficientTokensError,
-    TokenService,
-    UserNotFoundError,
-)
+from app.services.token_service import TokenService
 
 logger = get_logger(__name__)
 
@@ -61,9 +58,7 @@ DOCUMENT_COST: Final[int] = 20
 FORMAT_PDF: Final[str] = "pdf"
 FORMAT_DOCX: Final[str] = "docx"
 FORMAT_TXT: Final[str] = "txt"
-SUPPORTED_FORMATS: Final[frozenset[str]] = frozenset(
-    {FORMAT_PDF, FORMAT_DOCX, FORMAT_TXT}
-)
+SUPPORTED_FORMATS: Final[frozenset[str]] = frozenset({FORMAT_PDF, FORMAT_DOCX, FORMAT_TXT})
 
 # Mapping from common file extensions to the canonical format. We accept
 # upper-case + leading dot variants so the API layer can pass raw input.
@@ -218,13 +213,9 @@ class DocumentAnalysisService:
             filename=filename_clean,
             document_url=url_clean,
         )
-        size_bytes = self._compute_size(
-            file_size_bytes=file_size_bytes, document_base64=b64_clean
-        )
+        size_bytes = self._compute_size(file_size_bytes=file_size_bytes, document_base64=b64_clean)
         self._assert_size_within_cap(size_bytes, is_premium=is_premium)
         question_clean = self._validate_question(question)
-
-        await self._assert_balance_sufficient(user_id, DOCUMENT_COST)
 
         request_params: dict[str, Any] = {
             "format": format_clean,
@@ -254,12 +245,28 @@ class DocumentAnalysisService:
         if question_clean is not None:
             provider_params["question"] = question_clean
 
-        result = await self._invoke_provider(
+        spend = await self._tokens.spend(
             user_id=user_id,
-            params=provider_params,
-            request_id=request_id,
-            composio_user_id=composio_user_id,
+            amount=DOCUMENT_COST,
+            service=SERVICE_TYPE,
+            request_params=request_params,
+            response_status="pending",
         )
+
+        try:
+            result = await self._invoke_provider(
+                user_id=user_id,
+                params=provider_params,
+                request_id=request_id,
+                composio_user_id=composio_user_id,
+            )
+        except DocumentProviderError:
+            await self._refund_spend(
+                user_id=user_id,
+                transaction_id=spend.transaction_id,
+                reason="document provider failed",
+            )
+            raise
 
         text = self._extract_text(result)
         summary = self._extract_summary(result)
@@ -267,6 +274,11 @@ class DocumentAnalysisService:
         page_count = self._extract_page_count(result)
 
         if not text and not summary and not answer:
+            await self._refund_spend(
+                user_id=user_id,
+                transaction_id=spend.transaction_id,
+                reason="document provider returned empty result",
+            )
             await log_invocation(
                 self.session,
                 user_id=user_id,
@@ -279,15 +291,10 @@ class DocumentAnalysisService:
                 provider_error=result.error,
             )
 
-        spend = await self._tokens.spend(
+        await self._record_spend_result(
             user_id=user_id,
-            amount=DOCUMENT_COST,
-            service=SERVICE_TYPE,
-            request_params=request_params,
-            response_status="ok",
-            processing_time_ms=result.latency_ms,
-            composio_tool=result.tool,
-            mcp_server=result.mcp_server,
+            usage_log_id=spend.usage_log_id,
+            result=result,
         )
 
         logger.info(
@@ -330,13 +337,49 @@ class DocumentAnalysisService:
 
     # -------------------------------------------------------------- internal
 
-    async def _assert_balance_sufficient(self, user_id: int, cost: int) -> None:
+    async def _record_spend_result(
+        self,
+        *,
+        user_id: int,
+        usage_log_id: int,
+        result: ToolResult,
+    ) -> None:
         try:
-            balance = await self._tokens.get_balance(user_id)
-        except UserNotFoundError:
-            raise
-        if balance < cost:
-            raise InsufficientTokensError(required=cost, available=balance)
+            await self._tokens.record_spend_result(
+                usage_log_id=usage_log_id,
+                response_status="ok",
+                processing_time_ms=result.latency_ms,
+                composio_tool=result.tool,
+                mcp_server=result.mcp_server,
+            )
+        except Exception as exc:  # noqa: BLE001 — audit metadata is best-effort
+            logger.warning(
+                "document.spend_usage_update_failed",
+                user_id=user_id,
+                usage_log_id=usage_log_id,
+                error=str(exc),
+            )
+
+    async def _refund_spend(
+        self,
+        *,
+        user_id: int,
+        transaction_id: int,
+        reason: str,
+    ) -> None:
+        try:
+            await self._tokens.refund(
+                transaction_id=transaction_id,
+                reason=reason[:100],
+            )
+        except Exception as exc:  # noqa: BLE001 — preserve the provider error
+            logger.warning(
+                "document.refund_failed",
+                user_id=user_id,
+                transaction_id=transaction_id,
+                reason=reason,
+                error=str(exc),
+            )
 
     async def _invoke_provider(
         self,
@@ -375,8 +418,7 @@ class DocumentAnalysisService:
                 request_id=request_id,
             )
             raise DocumentProviderError(
-                f"document provider returned unsuccessful: "
-                f"{result.error or 'unknown'}",
+                f"document provider returned unsuccessful: " f"{result.error or 'unknown'}",
                 provider_error=result.error,
             )
         return result
@@ -451,20 +493,15 @@ class DocumentAnalysisService:
         if document_base64 is not None:
             b64_clean = str(document_base64).strip() or None
         if url_clean is None and b64_clean is None:
-            raise InvalidDocumentError(
-                "document_url or document_base64 is required"
-            )
+            raise InvalidDocumentError("document_url or document_base64 is required")
         if url_clean is not None and len(url_clean) > MAX_DOCUMENT_URL_LENGTH:
             raise InvalidDocumentError(
                 f"document_url must be at most {MAX_DOCUMENT_URL_LENGTH} characters"
             )
         if url_clean is not None and not (
-            url_clean.lower().startswith("http://")
-            or url_clean.lower().startswith("https://")
+            url_clean.lower().startswith("http://") or url_clean.lower().startswith("https://")
         ):
-            raise InvalidDocumentError(
-                "document_url must be an absolute http(s) URL"
-            )
+            raise InvalidDocumentError("document_url must be an absolute http(s) URL")
         return url_clean, b64_clean
 
     @staticmethod
@@ -475,9 +512,7 @@ class DocumentAnalysisService:
         if not clean:
             return None
         if len(clean) > MAX_FILENAME_LENGTH:
-            raise InvalidDocumentError(
-                f"filename must be at most {MAX_FILENAME_LENGTH} characters"
-            )
+            raise InvalidDocumentError(f"filename must be at most {MAX_FILENAME_LENGTH} characters")
         return clean
 
     @staticmethod
@@ -506,22 +541,17 @@ class DocumentAnalysisService:
         normalised = _FORMAT_ALIASES.get(candidate)
         if normalised is None:
             raise InvalidDocumentFormatError(
-                f"unsupported format {candidate!r}; "
-                f"supported: {sorted(SUPPORTED_FORMATS)}"
+                f"unsupported format {candidate!r}; " f"supported: {sorted(SUPPORTED_FORMATS)}"
             )
         return normalised
 
     @staticmethod
-    def _compute_size(
-        *, file_size_bytes: int | None, document_base64: str | None
-    ) -> int | None:
+    def _compute_size(*, file_size_bytes: int | None, document_base64: str | None) -> int | None:
         if file_size_bytes is not None:
             try:
                 num = int(file_size_bytes)
             except (TypeError, ValueError) as exc:
-                raise InvalidDocumentError(
-                    "file_size_bytes must be an integer"
-                ) from exc
+                raise InvalidDocumentError("file_size_bytes must be an integer") from exc
             if num < 0:
                 raise InvalidDocumentError("file_size_bytes must be non-negative")
             return num
@@ -537,9 +567,7 @@ class DocumentAnalysisService:
             return
         limit = MAX_FILE_BYTES_PREMIUM if is_premium else MAX_FILE_BYTES_FREE
         if size > limit:
-            raise DocumentTooLargeError(
-                size=size, limit=limit, is_premium=is_premium
-            )
+            raise DocumentTooLargeError(size=size, limit=limit, is_premium=is_premium)
 
     @staticmethod
     def _validate_question(value: str | None) -> str | None:
@@ -549,9 +577,7 @@ class DocumentAnalysisService:
         if not clean:
             return None
         if len(clean) > MAX_QUESTION_LENGTH:
-            raise InvalidQuestionError(
-                f"question must be at most {MAX_QUESTION_LENGTH} characters"
-            )
+            raise InvalidQuestionError(f"question must be at most {MAX_QUESTION_LENGTH} characters")
         return clean
 
 

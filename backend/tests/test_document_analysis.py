@@ -6,6 +6,7 @@ the suite runs without a database (same pattern as
 ``test_image_generation.py`` / ``test_web_search.py`` /
 ``test_voice_processing.py``).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -41,6 +42,7 @@ from app.services.document_analysis import (
 from app.services.token_service import (
     InsufficientTokensError,
     SpendResult,
+    TokenOperationResult,
     UserNotFoundError,
 )
 
@@ -49,6 +51,8 @@ from app.services.token_service import (
 
 @dataclass
 class _RecordedSpend:
+    transaction_id: int
+    usage_log_id: int
     user_id: int
     amount: int
     service: str
@@ -59,12 +63,19 @@ class _RecordedSpend:
     mcp_server: str | None
 
 
+@dataclass
+class _RecordedRefund:
+    transaction_id: int
+    reason: str | None
+
+
 class _FakeTokenService:
     """Stand-in for :class:`TokenService` that doesn't touch a DB."""
 
     def __init__(self, *, balances: dict[int, int] | None = None) -> None:
         self.balances: dict[int, int] = dict(balances or {})
         self.spends: list[_RecordedSpend] = []
+        self.refunds: list[_RecordedRefund] = []
         self.balance_calls: list[int] = []
         self._next_tx = 1000
         self._next_log = 5000
@@ -93,8 +104,14 @@ class _FakeTokenService:
         if current < amount:
             raise InsufficientTokensError(required=amount, available=current)
         self.balances[user_id] = current - amount
+        self._next_tx += 1
+        self._next_log += 1
+        transaction_id = self._next_tx
+        usage_log_id = self._next_log
         self.spends.append(
             _RecordedSpend(
+                transaction_id=transaction_id,
+                usage_log_id=usage_log_id,
                 user_id=user_id,
                 amount=amount,
                 service=service,
@@ -105,15 +122,53 @@ class _FakeTokenService:
                 mcp_server=mcp_server,
             )
         )
-        self._next_tx += 1
-        self._next_log += 1
         return SpendResult(
             user_id=user_id,
             amount=amount,
             new_balance=self.balances[user_id],
-            transaction_id=self._next_tx,
+            transaction_id=transaction_id,
             transaction_type="spend",
-            usage_log_id=self._next_log,
+            usage_log_id=usage_log_id,
+        )
+
+    async def record_spend_result(
+        self,
+        *,
+        usage_log_id: int,
+        response_status: str | None,
+        processing_time_ms: int | None = None,
+        composio_tool: str | None = None,
+        mcp_server: str | None = None,
+        request_params: dict[str, Any] | None = None,
+    ) -> None:
+        spend = next((s for s in self.spends if s.usage_log_id == usage_log_id), None)
+        if spend is None:
+            return
+        spend.response_status = response_status
+        spend.processing_time_ms = processing_time_ms
+        spend.composio_tool = composio_tool
+        spend.mcp_server = mcp_server
+        if request_params is not None:
+            spend.request_params = dict(request_params)
+
+    async def refund(
+        self,
+        *,
+        transaction_id: int,
+        reason: str | None = None,
+    ) -> TokenOperationResult:
+        self.refunds.append(_RecordedRefund(transaction_id=transaction_id, reason=reason))
+        spend = next((s for s in self.spends if s.transaction_id == transaction_id), None)
+        if spend is None:
+            raise RuntimeError("no matching spend to refund in fake service")
+        self.balances[spend.user_id] += spend.amount
+        self._next_tx += 1
+        return TokenOperationResult(
+            user_id=spend.user_id,
+            amount=spend.amount,
+            new_balance=self.balances[spend.user_id],
+            transaction_id=self._next_tx,
+            transaction_type="refund",
         )
 
 
@@ -210,9 +265,7 @@ async def test_rejects_overlong_document_url(
     with pytest.raises(InvalidDocumentError):
         await service.analyze(
             user_id=42,
-            document_url="https://example.com/"
-            + ("a" * (MAX_DOCUMENT_URL_LENGTH + 1))
-            + ".pdf",
+            document_url="https://example.com/" + ("a" * (MAX_DOCUMENT_URL_LENGTH + 1)) + ".pdf",
         )
 
 
@@ -224,9 +277,7 @@ async def test_rejects_non_http_document_url(
 ) -> None:
     service = _build_service(fake_session, composio_mock, fake_tokens)
     with pytest.raises(InvalidDocumentError):
-        await service.analyze(
-            user_id=42, document_url="ftp://example.com/a.pdf"
-        )
+        await service.analyze(user_id=42, document_url="ftp://example.com/a.pdf")
 
 
 @pytest.mark.asyncio
@@ -460,9 +511,7 @@ async def test_analyze_debits_flat_cost(
     composio_mock.set_response("document_parser", data=_ok_payload())
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
-    outcome = await service.analyze(
-        user_id=42, document_url="https://example.com/a.pdf"
-    )
+    outcome = await service.analyze(user_id=42, document_url="https://example.com/a.pdf")
 
     assert isinstance(outcome, DocumentAnalysisResult)
     assert outcome.tokens_spent == DOCUMENT_COST
@@ -498,9 +547,7 @@ async def test_analyze_with_question_returns_answer(
     assert outcome.question == "Where is X mentioned?"
     # Question text is fingerprinted (length only) in the audit row.
     assert fake_tokens.spends[0].request_params is not None
-    assert fake_tokens.spends[0].request_params["question_len"] == len(
-        "Where is X mentioned?"
-    )
+    assert fake_tokens.spends[0].request_params["question_len"] == len("Where is X mentioned?")
 
 
 @pytest.mark.asyncio
@@ -543,9 +590,7 @@ async def test_analyze_base64_inlined_in_provider_params(
     composio_mock.set_response("document_parser", data=_ok_payload())
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
-    await service.analyze(
-        user_id=42, document_base64="aGVsbG8=", format=FORMAT_TXT
-    )
+    await service.analyze(user_id=42, document_base64="aGVsbG8=", format=FORMAT_TXT)
 
     call = composio_mock.calls[0]
     # Full payload is sent to Composio…
@@ -624,9 +669,7 @@ async def test_analyze_normalises_payload_shapes(
     composio_mock.set_response("document_parser", data=payload)
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
-    outcome = await service.analyze(
-        user_id=42, document_url="https://example.com/a.pdf"
-    )
+    outcome = await service.analyze(user_id=42, document_url="https://example.com/a.pdf")
     assert outcome.text == expected_text
     assert outcome.summary == expected_summary
     assert outcome.page_count == expected_pages
@@ -667,9 +710,7 @@ async def test_summary_only_payload_is_accepted(
     )
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
-    outcome = await service.analyze(
-        user_id=42, document_url="https://example.com/a.pdf"
-    )
+    outcome = await service.analyze(user_id=42, document_url="https://example.com/a.pdf")
     assert outcome.summary == "Just the summary."
     # Empty text is still acceptable when summary is present.
     assert outcome.tokens_spent == DOCUMENT_COST
@@ -688,9 +729,7 @@ async def test_insufficient_balance_is_raised_before_provider_call(
     service = _build_service(fake_session, composio_mock, tokens)
 
     with pytest.raises(InsufficientTokensError) as exc:
-        await service.analyze(
-            user_id=42, document_url="https://example.com/a.pdf"
-        )
+        await service.analyze(user_id=42, document_url="https://example.com/a.pdf")
     assert exc.value.required == DOCUMENT_COST
     assert exc.value.available == 10
     assert composio_mock.calls == []
@@ -705,9 +744,7 @@ async def test_unknown_user_raises_user_not_found(
     tokens = _FakeTokenService(balances={})
     service = _build_service(fake_session, composio_mock, tokens)
     with pytest.raises(UserNotFoundError):
-        await service.analyze(
-            user_id=999, document_url="https://example.com/a.pdf"
-        )
+        await service.analyze(user_id=999, document_url="https://example.com/a.pdf")
 
 
 @pytest.mark.asyncio
@@ -716,18 +753,15 @@ async def test_provider_error_is_translated(
     fake_tokens: _FakeTokenService,
 ) -> None:
     composio_mock = MockComposioClient()
-    composio_mock.set_error(
-        "document_parser", ComposioTransientError("upstream 503")
-    )
+    composio_mock.set_error("document_parser", ComposioTransientError("upstream 503"))
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
     with pytest.raises(DocumentProviderError) as exc:
-        await service.analyze(
-            user_id=42, document_url="https://example.com/a.pdf"
-        )
+        await service.analyze(user_id=42, document_url="https://example.com/a.pdf")
     assert exc.value.provider_error is not None
     assert "document provider call failed" in str(exc.value)
-    assert fake_tokens.spends == []
+    assert len(fake_tokens.spends) == 1
+    assert len(fake_tokens.refunds) == 1
     assert fake_tokens.balances[42] == 500
 
 
@@ -746,11 +780,11 @@ async def test_unsuccessful_response_translates_to_provider_error(
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
     with pytest.raises(DocumentProviderError) as exc:
-        await service.analyze(
-            user_id=42, document_url="https://example.com/a.pdf"
-        )
+        await service.analyze(user_id=42, document_url="https://example.com/a.pdf")
     assert exc.value.provider_error == "parsing_failed"
-    assert fake_tokens.spends == []
+    assert len(fake_tokens.spends) == 1
+    assert len(fake_tokens.refunds) == 1
+    assert fake_tokens.balances[42] == 500
 
 
 @pytest.mark.asyncio
@@ -763,11 +797,10 @@ async def test_empty_response_audits_failure_and_raises(
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
     with pytest.raises(DocumentProviderError):
-        await service.analyze(
-            user_id=42, document_url="https://example.com/a.pdf"
-        )
+        await service.analyze(user_id=42, document_url="https://example.com/a.pdf")
 
     assert len(fake_session.added) >= 1
     assert fake_session.flushes >= 1
-    assert fake_tokens.spends == []
+    assert len(fake_tokens.spends) == 1
+    assert len(fake_tokens.refunds) == 1
     assert fake_tokens.balances[42] == 500

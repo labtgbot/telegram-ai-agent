@@ -21,6 +21,7 @@ The ``users.token_balance >= 0`` invariant is enforced here rather than
 at the DB level so the API can surface a structured error to the UI —
 see ``docs/DATABASE_SCHEMA.md > Invariants``.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -65,9 +66,7 @@ class InsufficientTokensError(TokenServiceError):
     """
 
     def __init__(self, *, required: int, available: int) -> None:
-        super().__init__(
-            f"insufficient tokens: required={required}, available={available}"
-        )
+        super().__init__(f"insufficient tokens: required={required}, available={available}")
         self.required = required
         self.available = available
 
@@ -156,9 +155,7 @@ class TokenService:
     # ------------------------------------------------------------- internal
 
     def _mark_balance_cache_dirty(self, user_id: int) -> None:
-        dirty_user_ids = self.session.info.setdefault(
-            _DIRTY_BALANCE_CACHE_USERS_KEY, set()
-        )
+        dirty_user_ids = self.session.info.setdefault(_DIRTY_BALANCE_CACHE_USERS_KEY, set())
         dirty_user_ids.add(int(user_id))
 
     def _is_balance_cache_dirty(self, user_id: int) -> bool:
@@ -226,9 +223,7 @@ class TokenService:
         await self._assert_user_exists(user_id)
 
         total_stmt = (
-            select(func.count())
-            .select_from(TokenUsageLog)
-            .where(TokenUsageLog.user_id == user_id)
+            select(func.count()).select_from(TokenUsageLog).where(TokenUsageLog.user_id == user_id)
         )
         total = int((await self.session.execute(total_stmt)).scalar_one())
 
@@ -308,9 +303,7 @@ class TokenService:
         user = await self._lock_user(user_id)
         user.token_balance = int(user.token_balance or 0) + amount
         if transaction_type == "purchase":
-            user.total_tokens_purchased = (
-                int(user.total_tokens_purchased or 0) + amount
-            )
+            user.total_tokens_purchased = int(user.total_tokens_purchased or 0) + amount
 
         usd_value = Decimal(str(usd_amount)) if usd_amount is not None else None
         now = datetime.now(UTC)
@@ -429,6 +422,48 @@ class TokenService:
             usage_log_id=int(usage.id),
         )
 
+    async def record_spend_result(
+        self,
+        *,
+        usage_log_id: int,
+        response_status: str | None,
+        processing_time_ms: int | None = None,
+        composio_tool: str | None = None,
+        mcp_server: str | None = None,
+        request_params: dict[str, Any] | None = None,
+    ) -> None:
+        """Attach provider outcome metadata to an existing spend usage row.
+
+        Debit-first services reserve tokens before the provider call.  Once
+        the provider returns, they use this hook to replace the provisional
+        usage-log status with the actual provider metadata.
+        """
+        stmt = select(TokenUsageLog).where(TokenUsageLog.id == int(usage_log_id))
+        usage = (await self.session.execute(stmt)).scalar_one_or_none()
+        if usage is None:
+            logger.warning(
+                "tokens.spend_usage_log_missing",
+                usage_log_id=usage_log_id,
+                response_status=response_status,
+            )
+            return
+
+        usage.response_status = response_status
+        usage.processing_time_ms = processing_time_ms
+        usage.composio_tool = composio_tool[:255] if composio_tool else None
+        usage.mcp_server = mcp_server[:255] if mcp_server else None
+        if request_params is not None:
+            usage.request_params = request_params
+        await self.session.flush()
+
+        logger.debug(
+            "tokens.spend_usage_log_updated",
+            usage_log_id=usage_log_id,
+            response_status=response_status,
+            composio_tool=usage.composio_tool,
+            mcp_server=usage.mcp_server,
+        )
+
     # -------------------------------------------------------- manual_bonus
 
     async def manual_bonus(
@@ -486,16 +521,10 @@ class TokenService:
 
         Already-refunded transactions cannot be refunded a second time.
         """
-        stmt = (
-            select(Transaction)
-            .where(Transaction.id == transaction_id)
-            .with_for_update()
-        )
+        stmt = select(Transaction).where(Transaction.id == transaction_id).with_for_update()
         original = (await self.session.execute(stmt)).scalar_one_or_none()
         if original is None:
-            raise TransactionNotFoundError(
-                f"transaction {transaction_id} not found"
-            )
+            raise TransactionNotFoundError(f"transaction {transaction_id} not found")
         if original.transaction_type not in REFUNDABLE_TYPES:
             raise TransactionNotRefundableError(
                 f"transaction {transaction_id} type "
@@ -504,9 +533,7 @@ class TokenService:
 
         # Embed the original type in the marker so the reconcile query can
         # classify refund rows without re-joining to the source transaction.
-        payment_marker = (
-            f"refund:{original.transaction_type}:tx={transaction_id}"
-        )
+        payment_marker = f"refund:{original.transaction_type}:tx={transaction_id}"
         existing = await self.session.execute(
             select(Transaction.id).where(
                 Transaction.transaction_type == "refund",
@@ -514,22 +541,16 @@ class TokenService:
             )
         )
         if existing.scalar_one_or_none() is not None:
-            raise TransactionNotRefundableError(
-                f"transaction {transaction_id} already refunded"
-            )
+            raise TransactionNotRefundableError(f"transaction {transaction_id} already refunded")
 
         user = await self._lock_user(original.user_id)
         amount = int(original.tokens_amount)
         if original.transaction_type == "spend":
             user.token_balance = int(user.token_balance or 0) + amount
-            user.total_tokens_spent = max(
-                int(user.total_tokens_spent or 0) - amount, 0
-            )
+            user.total_tokens_spent = max(int(user.total_tokens_spent or 0) - amount, 0)
         else:  # purchase
             user.token_balance = max(int(user.token_balance or 0) - amount, 0)
-            user.total_tokens_purchased = max(
-                int(user.total_tokens_purchased or 0) - amount, 0
-            )
+            user.total_tokens_purchased = max(int(user.total_tokens_purchased or 0) - amount, 0)
 
         now = datetime.now(UTC)
         tx = Transaction(
@@ -579,9 +600,7 @@ class BalanceAudit:
         return self.drift == 0
 
 
-async def reconcile_user_balance(
-    session: AsyncSession, user_id: int
-) -> BalanceAudit:
+async def reconcile_user_balance(session: AsyncSession, user_id: int) -> BalanceAudit:
     """Recompute the balance from the transaction ledger and compare.
 
     The expected balance is::
@@ -605,9 +624,7 @@ async def reconcile_user_balance(
     base_credit_stmt = (
         select(func.coalesce(func.sum(Transaction.tokens_amount), 0))
         .where(Transaction.user_id == user_id)
-        .where(
-            Transaction.transaction_type.in_(("purchase", "bonus", "manual_bonus"))
-        )
+        .where(Transaction.transaction_type.in_(("purchase", "bonus", "manual_bonus")))
     )
     spend_stmt = (
         select(func.coalesce(func.sum(Transaction.tokens_amount), 0))

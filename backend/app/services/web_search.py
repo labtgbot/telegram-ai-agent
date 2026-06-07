@@ -8,17 +8,18 @@ reused — only the request/response payloads differ.
 The service orchestrates one end-to-end ``search`` call:
 
 1.  Validate the query (length, non-empty) and ``max_results``.
-2.  Pre-check the user's balance against the flat 3-token price.
+2.  Atomically debit the flat 3-token price before the provider call.
 3.  Invoke the Composio ``composio_search`` toolkit.
 4.  Normalise the heterogenous result payload into a list of
     :class:`SearchResult` items + an optional summary string.
-5.  Atomically debit the cost via :class:`TokenService.spend` and record
-    a structured row in ``token_usage_logs``.
+5.  Attach provider metadata to the structured ``token_usage_logs`` row;
+    on provider failure, refund the debit and write a zero-cost audit row.
 
 The service flushes its writes but does **not** commit — the caller
 controls the outer transaction, matching every other service in
 ``app.services``.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -34,11 +35,7 @@ from app.services.composio import (
     ToolResult,
     log_invocation,
 )
-from app.services.token_service import (
-    InsufficientTokensError,
-    TokenService,
-    UserNotFoundError,
-)
+from app.services.token_service import TokenService
 
 logger = get_logger(__name__)
 
@@ -150,25 +147,44 @@ class WebSearchService:
         query_clean = self._validate_query(query)
         max_results_clean = self._validate_max_results(max_results)
 
-        await self._assert_balance_sufficient(user_id, SEARCH_COST)
-
         request_params: dict[str, Any] = {
             "query": query_clean,
             "max_results": max_results_clean,
         }
         provider_params: dict[str, Any] = dict(request_params)
 
-        result = await self._invoke_provider(
+        spend = await self._tokens.spend(
             user_id=user_id,
-            params=provider_params,
-            request_id=request_id,
-            composio_user_id=composio_user_id,
+            amount=SEARCH_COST,
+            service=SERVICE_TYPE,
+            request_params=request_params,
+            response_status="pending",
         )
+
+        try:
+            result = await self._invoke_provider(
+                user_id=user_id,
+                params=provider_params,
+                request_id=request_id,
+                composio_user_id=composio_user_id,
+            )
+        except SearchProviderError:
+            await self._refund_spend(
+                user_id=user_id,
+                transaction_id=spend.transaction_id,
+                reason="search provider failed",
+            )
+            raise
 
         results = self._extract_results(result, limit=max_results_clean)
         summary = self._extract_summary(result)
 
         if not results and not summary:
+            await self._refund_spend(
+                user_id=user_id,
+                transaction_id=spend.transaction_id,
+                reason="search provider returned empty result",
+            )
             # Audit the failure (zero-cost row) so it surfaces in usage history.
             await log_invocation(
                 self.session,
@@ -182,15 +198,10 @@ class WebSearchService:
                 provider_error=result.error,
             )
 
-        spend = await self._tokens.spend(
+        await self._record_spend_result(
             user_id=user_id,
-            amount=SEARCH_COST,
-            service=SERVICE_TYPE,
-            request_params=request_params,
-            response_status="ok",
-            processing_time_ms=result.latency_ms,
-            composio_tool=result.tool,
-            mcp_server=result.mcp_server,
+            usage_log_id=spend.usage_log_id,
+            result=result,
         )
 
         logger.info(
@@ -225,13 +236,49 @@ class WebSearchService:
 
     # -------------------------------------------------------------- internal
 
-    async def _assert_balance_sufficient(self, user_id: int, cost: int) -> None:
+    async def _record_spend_result(
+        self,
+        *,
+        user_id: int,
+        usage_log_id: int,
+        result: ToolResult,
+    ) -> None:
         try:
-            balance = await self._tokens.get_balance(user_id)
-        except UserNotFoundError:
-            raise
-        if balance < cost:
-            raise InsufficientTokensError(required=cost, available=balance)
+            await self._tokens.record_spend_result(
+                usage_log_id=usage_log_id,
+                response_status="ok",
+                processing_time_ms=result.latency_ms,
+                composio_tool=result.tool,
+                mcp_server=result.mcp_server,
+            )
+        except Exception as exc:  # noqa: BLE001 — audit metadata is best-effort
+            logger.warning(
+                "search.spend_usage_update_failed",
+                user_id=user_id,
+                usage_log_id=usage_log_id,
+                error=str(exc),
+            )
+
+    async def _refund_spend(
+        self,
+        *,
+        user_id: int,
+        transaction_id: int,
+        reason: str,
+    ) -> None:
+        try:
+            await self._tokens.refund(
+                transaction_id=transaction_id,
+                reason=reason[:100],
+            )
+        except Exception as exc:  # noqa: BLE001 — preserve the provider error
+            logger.warning(
+                "search.refund_failed",
+                user_id=user_id,
+                transaction_id=transaction_id,
+                reason=reason,
+                error=str(exc),
+            )
 
     async def _invoke_provider(
         self,
@@ -323,9 +370,7 @@ class WebSearchService:
         if not clean:
             raise InvalidQueryError("query is required")
         if len(clean) > MAX_QUERY_LENGTH:
-            raise InvalidQueryError(
-                f"query must be at most {MAX_QUERY_LENGTH} characters"
-            )
+            raise InvalidQueryError(f"query must be at most {MAX_QUERY_LENGTH} characters")
         return clean
 
     @staticmethod

@@ -24,6 +24,7 @@ Composio invocation.  An optional :class:`SummaryStrategy` collapses old
 turns when the thread grows past a configurable threshold so subsequent
 prompts stay within token budgets.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,11 +48,7 @@ from app.services.composio import (
     ToolResult,
     log_invocation,
 )
-from app.services.token_service import (
-    InsufficientTokensError,
-    TokenService,
-    UserNotFoundError,
-)
+from app.services.token_service import TokenService
 
 logger = get_logger(__name__)
 
@@ -249,13 +246,9 @@ class ConversationHistory(Protocol):
 
     async def load(self, user_id: int, thread_id: str) -> list[ChatTurn]: ...
 
-    async def replace(
-        self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]
-    ) -> None: ...
+    async def replace(self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]) -> None: ...
 
-    async def append(
-        self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]
-    ) -> None: ...
+    async def append(self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]) -> None: ...
 
     async def delete(self, user_id: int, thread_id: str) -> None: ...
 
@@ -307,20 +300,14 @@ class RedisConversationHistory:
             return []
         if not isinstance(payload, list):
             return []
-        return [
-            ChatTurn.from_dict(item) for item in payload if isinstance(item, dict)
-        ]
+        return [ChatTurn.from_dict(item) for item in payload if isinstance(item, dict)]
 
-    async def replace(
-        self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]
-    ) -> None:
+    async def replace(self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]) -> None:
         trimmed = list(turns)[-self._max_turns :]
         payload = json.dumps([turn.to_dict() for turn in trimmed])
         await self._redis.set(self._key(user_id, thread_id), payload, ex=self._ttl)
 
-    async def append(
-        self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]
-    ) -> None:
+    async def append(self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]) -> None:
         existing = await self.load(user_id, thread_id)
         existing.extend(turns)
         await self.replace(user_id, thread_id, existing)
@@ -352,18 +339,14 @@ class DbConversationHistory:
         self._session = session
         self._max_turns = int(max_turns)
 
-    async def _get_thread(
-        self, user_id: int, thread_id: str
-    ) -> ChatThread | None:
+    async def _get_thread(self, user_id: int, thread_id: str) -> ChatThread | None:
         stmt = select(ChatThread).where(
             ChatThread.user_id == user_id,
             ChatThread.external_id == thread_id,
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
 
-    async def _ensure_thread(
-        self, user_id: int, thread_id: str
-    ) -> ChatThread:
+    async def _ensure_thread(self, user_id: int, thread_id: str) -> ChatThread:
         thread = await self._get_thread(user_id, thread_id)
         if thread is not None:
             return thread
@@ -396,9 +379,7 @@ class DbConversationHistory:
         ]
         return turns[-self._max_turns :]
 
-    async def replace(
-        self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]
-    ) -> None:
+    async def replace(self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]) -> None:
         """Rewrite the thread's message log to match ``turns``.
 
         Implemented as ``delete + bulk insert`` — the auto-summariser
@@ -408,9 +389,7 @@ class DbConversationHistory:
         round-trip cost is negligible.
         """
         thread = await self._ensure_thread(user_id, thread_id)
-        await self._session.execute(
-            delete(ChatMessage).where(ChatMessage.thread_id == thread.id)
-        )
+        await self._session.execute(delete(ChatMessage).where(ChatMessage.thread_id == thread.id))
         trimmed = list(turns)[-self._max_turns :]
         last_created: datetime | None = None
         for turn in trimmed:
@@ -431,9 +410,7 @@ class DbConversationHistory:
             thread.last_message_at = last_created
         await self._session.flush()
 
-    async def append(
-        self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]
-    ) -> None:
+    async def append(self, user_id: int, thread_id: str, turns: Sequence[ChatTurn]) -> None:
         thread = await self._ensure_thread(user_id, thread_id)
         added = 0
         last_created: datetime | None = None
@@ -462,9 +439,7 @@ class DbConversationHistory:
         thread = await self._get_thread(user_id, thread_id)
         if thread is None:
             return
-        await self._session.execute(
-            delete(ChatMessage).where(ChatMessage.thread_id == thread.id)
-        )
+        await self._session.execute(delete(ChatMessage).where(ChatMessage.thread_id == thread.id))
         await self._session.delete(thread)
         await self._session.flush()
 
@@ -628,13 +603,9 @@ class TextGenerationService:
         max_tokens_clean = self._validate_max_tokens(max_tokens)
         cost = MODE_COST[mode_clean]
 
-        await self._assert_balance_sufficient(user_id, cost)
-
         thread_turns = await self._load_history(user_id, thread_id)
         thread_turns.append(
-            ChatTurn(
-                role=ROLE_USER, content=prompt_clean, created_at=datetime.now(UTC)
-            )
+            ChatTurn(role=ROLE_USER, content=prompt_clean, created_at=datetime.now(UTC))
         )
         thread_turns = await self.summariser.maybe_summarise(
             user_id=user_id, thread_id=thread_id, turns=thread_turns
@@ -658,16 +629,37 @@ class TextGenerationService:
 
         overrides = self._resolve_overrides(mode_clean, provider_overrides)
 
-        result = await self._invoke_provider(
+        spend = await self._tokens.spend(
             user_id=user_id,
-            params=provider_params,
-            request_id=request_id,
-            composio_user_id=composio_user_id,
-            overrides=overrides,
+            amount=cost,
+            service=SERVICE_TYPE,
+            request_params=request_params,
+            response_status="pending",
         )
+
+        try:
+            result = await self._invoke_provider(
+                user_id=user_id,
+                params=provider_params,
+                request_id=request_id,
+                composio_user_id=composio_user_id,
+                overrides=overrides,
+            )
+        except TextProviderError:
+            await self._refund_spend(
+                user_id=user_id,
+                transaction_id=spend.transaction_id,
+                reason="text provider failed",
+            )
+            raise
 
         text = self._extract_text(result)
         if not text:
+            await self._refund_spend(
+                user_id=user_id,
+                transaction_id=spend.transaction_id,
+                reason="text provider returned empty result",
+            )
             # Audit the failure (zero-cost row) so it surfaces in usage history.
             await log_invocation(
                 self.session,
@@ -681,21 +673,14 @@ class TextGenerationService:
                 provider_error=result.error,
             )
 
-        spend = await self._tokens.spend(
+        await self._record_spend_result(
             user_id=user_id,
-            amount=cost,
-            service=SERVICE_TYPE,
-            request_params=request_params,
-            response_status="ok",
-            processing_time_ms=result.latency_ms,
-            composio_tool=result.tool,
-            mcp_server=result.mcp_server,
+            usage_log_id=spend.usage_log_id,
+            result=result,
         )
 
         thread_turns.append(
-            ChatTurn(
-                role=ROLE_ASSISTANT, content=text, created_at=datetime.now(UTC)
-            )
+            ChatTurn(role=ROLE_ASSISTANT, content=text, created_at=datetime.now(UTC))
         )
         await self._save_history(user_id, thread_id, thread_turns)
 
@@ -785,14 +770,49 @@ class TextGenerationService:
 
     # -------------------------------------------------------------- helpers
 
-    async def _assert_balance_sufficient(self, user_id: int, cost: int) -> None:
-        """Pre-flight balance check (see image_generation for rationale)."""
+    async def _record_spend_result(
+        self,
+        *,
+        user_id: int,
+        usage_log_id: int,
+        result: ToolResult,
+    ) -> None:
         try:
-            balance = await self._tokens.get_balance(user_id)
-        except UserNotFoundError:
-            raise
-        if balance < cost:
-            raise InsufficientTokensError(required=cost, available=balance)
+            await self._tokens.record_spend_result(
+                usage_log_id=usage_log_id,
+                response_status="ok",
+                processing_time_ms=result.latency_ms,
+                composio_tool=result.tool,
+                mcp_server=result.mcp_server,
+            )
+        except Exception as exc:  # noqa: BLE001 — audit metadata is best-effort
+            logger.warning(
+                "text.spend_usage_update_failed",
+                user_id=user_id,
+                usage_log_id=usage_log_id,
+                error=str(exc),
+            )
+
+    async def _refund_spend(
+        self,
+        *,
+        user_id: int,
+        transaction_id: int,
+        reason: str,
+    ) -> None:
+        try:
+            await self._tokens.refund(
+                transaction_id=transaction_id,
+                reason=reason[:100],
+            )
+        except Exception as exc:  # noqa: BLE001 — preserve the provider error
+            logger.warning(
+                "text.refund_failed",
+                user_id=user_id,
+                transaction_id=transaction_id,
+                reason=reason,
+                error=str(exc),
+            )
 
     async def _invoke_provider(
         self,
@@ -838,9 +858,7 @@ class TextGenerationService:
             )
         return result
 
-    async def _load_history(
-        self, user_id: int, thread_id: str | None
-    ) -> list[ChatTurn]:
+    async def _load_history(self, user_id: int, thread_id: str | None) -> list[ChatTurn]:
         if self.history is None or not thread_id:
             return []
         try:
@@ -970,9 +988,7 @@ class TextGenerationService:
         if not clean:
             raise InvalidPromptError("prompt is required")
         if len(clean) > MAX_PROMPT_LENGTH:
-            raise InvalidPromptError(
-                f"prompt must be at most {MAX_PROMPT_LENGTH} characters"
-            )
+            raise InvalidPromptError(f"prompt must be at most {MAX_PROMPT_LENGTH} characters")
         return clean
 
     @staticmethod
@@ -994,9 +1010,7 @@ class TextGenerationService:
             raise InvalidModeError("mode is required")
         clean = str(mode).strip().lower()
         if clean not in SUPPORTED_MODES:
-            raise InvalidModeError(
-                f"mode must be one of {sorted(SUPPORTED_MODES)}"
-            )
+            raise InvalidModeError(f"mode must be one of {sorted(SUPPORTED_MODES)}")
         return clean
 
     @staticmethod

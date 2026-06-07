@@ -5,6 +5,7 @@ in-memory stub for the SQLAlchemy session / :class:`TokenService` so
 the suite runs without a database (same pattern as
 ``test_image_generation.py`` / ``test_web_search.py``).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from app.services.composio import (
 from app.services.token_service import (
     InsufficientTokensError,
     SpendResult,
+    TokenOperationResult,
     UserNotFoundError,
 )
 from app.services.voice_processing import (
@@ -47,6 +49,8 @@ from app.services.voice_processing import (
 
 @dataclass
 class _RecordedSpend:
+    transaction_id: int
+    usage_log_id: int
     user_id: int
     amount: int
     service: str
@@ -57,12 +61,19 @@ class _RecordedSpend:
     mcp_server: str | None
 
 
+@dataclass
+class _RecordedRefund:
+    transaction_id: int
+    reason: str | None
+
+
 class _FakeTokenService:
     """Stand-in for :class:`TokenService` that doesn't touch a DB."""
 
     def __init__(self, *, balances: dict[int, int] | None = None) -> None:
         self.balances: dict[int, int] = dict(balances or {})
         self.spends: list[_RecordedSpend] = []
+        self.refunds: list[_RecordedRefund] = []
         self.balance_calls: list[int] = []
         self._next_tx = 1000
         self._next_log = 5000
@@ -91,8 +102,14 @@ class _FakeTokenService:
         if current < amount:
             raise InsufficientTokensError(required=amount, available=current)
         self.balances[user_id] = current - amount
+        self._next_tx += 1
+        self._next_log += 1
+        transaction_id = self._next_tx
+        usage_log_id = self._next_log
         self.spends.append(
             _RecordedSpend(
+                transaction_id=transaction_id,
+                usage_log_id=usage_log_id,
                 user_id=user_id,
                 amount=amount,
                 service=service,
@@ -103,15 +120,53 @@ class _FakeTokenService:
                 mcp_server=mcp_server,
             )
         )
-        self._next_tx += 1
-        self._next_log += 1
         return SpendResult(
             user_id=user_id,
             amount=amount,
             new_balance=self.balances[user_id],
-            transaction_id=self._next_tx,
+            transaction_id=transaction_id,
             transaction_type="spend",
-            usage_log_id=self._next_log,
+            usage_log_id=usage_log_id,
+        )
+
+    async def record_spend_result(
+        self,
+        *,
+        usage_log_id: int,
+        response_status: str | None,
+        processing_time_ms: int | None = None,
+        composio_tool: str | None = None,
+        mcp_server: str | None = None,
+        request_params: dict[str, Any] | None = None,
+    ) -> None:
+        spend = next((s for s in self.spends if s.usage_log_id == usage_log_id), None)
+        if spend is None:
+            return
+        spend.response_status = response_status
+        spend.processing_time_ms = processing_time_ms
+        spend.composio_tool = composio_tool
+        spend.mcp_server = mcp_server
+        if request_params is not None:
+            spend.request_params = dict(request_params)
+
+    async def refund(
+        self,
+        *,
+        transaction_id: int,
+        reason: str | None = None,
+    ) -> TokenOperationResult:
+        self.refunds.append(_RecordedRefund(transaction_id=transaction_id, reason=reason))
+        spend = next((s for s in self.spends if s.transaction_id == transaction_id), None)
+        if spend is None:
+            raise RuntimeError("no matching spend to refund in fake service")
+        self.balances[spend.user_id] += spend.amount
+        self._next_tx += 1
+        return TokenOperationResult(
+            user_id=spend.user_id,
+            amount=spend.amount,
+            new_balance=self.balances[spend.user_id],
+            transaction_id=self._next_tx,
+            transaction_type="refund",
         )
 
 
@@ -387,9 +442,7 @@ async def test_stt_only_debits_flat_cost(
     composio_mock.set_handler("elevenlabs", _stt_only_handler())
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
-    outcome = await service.process(
-        user_id=42, audio_url="https://example.com/a.ogg"
-    )
+    outcome = await service.process(user_id=42, audio_url="https://example.com/a.ogg")
 
     assert isinstance(outcome, VoiceProcessingResult)
     assert outcome.transcript == "hello world"
@@ -510,9 +563,7 @@ async def test_voice_spend_audit_has_both_legs_when_synthesizing(
     composio_mock: MockComposioClient,
     fake_tokens: _FakeTokenService,
 ) -> None:
-    composio_mock.set_handler(
-        "elevenlabs", _stt_plus_tts_handler()
-    )
+    composio_mock.set_handler("elevenlabs", _stt_plus_tts_handler())
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
     await service.process(
@@ -555,9 +606,7 @@ async def test_voice_extracts_transcript_from_various_shapes(
     composio_mock.set_response("elevenlabs", data=payload)
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
-    outcome = await service.process(
-        user_id=42, audio_url="https://example.com/a.ogg"
-    )
+    outcome = await service.process(user_id=42, audio_url="https://example.com/a.ogg")
     assert outcome.transcript == expected
 
 
@@ -581,9 +630,7 @@ async def test_voice_extracts_language_from_various_shapes(
     composio_mock.set_response("elevenlabs", data=payload)
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
-    outcome = await service.process(
-        user_id=42, audio_url="https://example.com/a.ogg"
-    )
+    outcome = await service.process(user_id=42, audio_url="https://example.com/a.ogg")
     assert outcome.language == expected
 
 
@@ -646,9 +693,7 @@ async def test_insufficient_balance_is_raised_before_provider_call(
     service = _build_service(fake_session, composio_mock, tokens)
 
     with pytest.raises(InsufficientTokensError) as exc:
-        await service.process(
-            user_id=42, audio_url="https://example.com/a.ogg"
-        )
+        await service.process(user_id=42, audio_url="https://example.com/a.ogg")
     assert exc.value.required == VOICE_COST
     assert exc.value.available == 3
     assert composio_mock.calls == []
@@ -663,9 +708,7 @@ async def test_unknown_user_raises_user_not_found(
     tokens = _FakeTokenService(balances={})
     service = _build_service(fake_session, composio_mock, tokens)
     with pytest.raises(UserNotFoundError):
-        await service.process(
-            user_id=999, audio_url="https://example.com/a.ogg"
-        )
+        await service.process(user_id=999, audio_url="https://example.com/a.ogg")
 
 
 @pytest.mark.asyncio
@@ -674,18 +717,15 @@ async def test_provider_error_in_stt_phase_is_translated(
     fake_tokens: _FakeTokenService,
 ) -> None:
     composio_mock = MockComposioClient()
-    composio_mock.set_error(
-        "elevenlabs", ComposioTransientError("stt upstream 503")
-    )
+    composio_mock.set_error("elevenlabs", ComposioTransientError("stt upstream 503"))
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
     with pytest.raises(VoiceProviderError) as exc:
-        await service.process(
-            user_id=42, audio_url="https://example.com/a.ogg"
-        )
+        await service.process(user_id=42, audio_url="https://example.com/a.ogg")
     assert exc.value.provider_error is not None
     assert "stt" in str(exc.value).lower()
-    assert fake_tokens.spends == []
+    assert len(fake_tokens.spends) == 1
+    assert len(fake_tokens.refunds) == 1
     assert fake_tokens.balances[42] == 500
 
 
@@ -717,8 +757,9 @@ async def test_provider_error_in_tts_phase_does_not_charge(
             synthesize_reply=True,
         )
     assert "tts" in str(exc.value).lower()
-    # Balance untouched — STT cost is not charged if the TTS leg fails.
-    assert fake_tokens.spends == []
+    # Balance returns to its original value after the refund.
+    assert len(fake_tokens.spends) == 1
+    assert len(fake_tokens.refunds) == 1
     assert fake_tokens.balances[42] == 500
 
 
@@ -732,13 +773,12 @@ async def test_empty_transcript_audits_failure_and_raises(
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
     with pytest.raises(VoiceProviderError):
-        await service.process(
-            user_id=42, audio_url="https://example.com/a.ogg"
-        )
+        await service.process(user_id=42, audio_url="https://example.com/a.ogg")
 
     assert len(fake_session.added) >= 1
     assert fake_session.flushes >= 1
-    assert fake_tokens.spends == []
+    assert len(fake_tokens.spends) == 1
+    assert len(fake_tokens.refunds) == 1
     assert fake_tokens.balances[42] == 500
 
 
@@ -777,7 +817,8 @@ async def test_empty_tts_audio_url_audits_failure_and_raises(
 
     assert len(fake_session.added) >= 1
     assert fake_session.flushes >= 1
-    assert fake_tokens.spends == []
+    assert len(fake_tokens.spends) == 1
+    assert len(fake_tokens.refunds) == 1
     assert fake_tokens.balances[42] == 500
 
 
@@ -796,8 +837,8 @@ async def test_unsuccessful_stt_response_translates_to_provider_error(
     service = _build_service(fake_session, composio_mock, fake_tokens)
 
     with pytest.raises(VoiceProviderError) as exc:
-        await service.process(
-            user_id=42, audio_url="https://example.com/a.ogg"
-        )
+        await service.process(user_id=42, audio_url="https://example.com/a.ogg")
     assert exc.value.provider_error == "rate_limited"
-    assert fake_tokens.spends == []
+    assert len(fake_tokens.spends) == 1
+    assert len(fake_tokens.refunds) == 1
+    assert fake_tokens.balances[42] == 500
