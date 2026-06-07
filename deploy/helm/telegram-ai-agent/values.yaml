@@ -62,6 +62,7 @@ config:
   LOG_FORMAT: json
   API_V1_PREFIX: /api/v1
   HEALTH_CHECK_TIMEOUT: "2.0"
+  TRUSTED_PROXY_IPS: ""
   TELEGRAM_API_BASE_URL: https://api.telegram.org
   TELEGRAM_SET_COMMANDS_ON_STARTUP: "true"
   COMPOSIO_BASE_URL: https://backend.composio.dev

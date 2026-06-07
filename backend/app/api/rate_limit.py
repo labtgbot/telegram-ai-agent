@@ -33,6 +33,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Request, Response, status
 
 from app.auth.dependencies import SessionDep
+from app.core.client_ip import resolve_client_ip
 from app.core.logging import get_logger
 from app.core.redis import get_redis
 from app.models.user import User
@@ -65,24 +66,6 @@ async def get_rate_limiter(session: SessionDep) -> RateLimiter:
 
 
 RateLimiterDep = Annotated[RateLimiter, Depends(get_rate_limiter)]
-
-
-def _client_ip(request: Request) -> str:
-    """Best-effort client IP, used as the anonymous-bucket identifier.
-
-    Honours ``X-Forwarded-For`` (first hop) when present — the deployment
-    notes describe nginx/Cloudflare in front of the app — and falls back
-    to the direct peer address. Returns ``"unknown"`` if neither is
-    available (test clients).
-    """
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        head = fwd.split(",", 1)[0].strip()
-        if head:
-            return head
-    if request.client and request.client.host:
-        return request.client.host
-    return "unknown"
 
 
 def _attach_headers(response: Response, result: RateLimitResult) -> None:
@@ -128,7 +111,7 @@ def rate_limit(
             identifier = str(user.telegram_id)
         else:
             plan = PLAN_ANONYMOUS
-            identifier = f"ip:{_client_ip(request)}"
+            identifier = f"ip:{resolve_client_ip(request) or 'unknown'}"
 
         try:
             result = await limiter.consume(

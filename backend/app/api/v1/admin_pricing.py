@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from app.auth.dependencies import SessionDep, get_current_admin
 from app.auth.rbac import Role, require_role
+from app.core.client_ip import resolve_client_ip
 from app.core.logging import get_logger
 from app.models.admin_audit_log import AdminAuditLog
 from app.models.user import User
@@ -181,11 +182,7 @@ class PricingHistoryResponse(BaseModel):
 
 
 def _request_meta(request: Request) -> tuple[str | None, str | None]:
-    ip = (
-        request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-        or (request.client.host if request.client else None)
-    )
-    return ip or None, request.headers.get("user-agent")
+    return resolve_client_ip(request), request.headers.get("user-agent")
 
 
 async def _commit_or_500(session: Any) -> None:

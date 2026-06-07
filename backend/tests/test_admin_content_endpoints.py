@@ -523,7 +523,7 @@ async def test_create_prompt_template_persists_and_audits(build_app) -> None:
     assert body["created_by"] == 1
     audit = build_app["audit_log"][-1]
     assert audit.action == "prompt_template.create"
-    assert audit.ip_address == "203.0.113.7"
+    assert audit.ip_address == "127.0.0.1"
     assert audit.user_agent == "tests/1.0"
     assert build_app["session"].committed is True
 

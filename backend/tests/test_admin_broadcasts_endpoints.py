@@ -393,7 +393,7 @@ async def test_create_broadcast_persists_and_audits(build_app) -> None:
 
     audit = build_app["audit_log"][-1]
     assert audit.action == "broadcast.create"
-    assert audit.ip_address == "203.0.113.7"
+    assert audit.ip_address == "127.0.0.1"
     assert audit.user_agent == "tests/1.0"
     assert build_app["session"].committed is True
 
@@ -545,7 +545,7 @@ async def test_cancel_broadcast_marks_cancelled_and_audits(build_app) -> None:
     assert body["status"] == "cancelled"
     audit = build_app["audit_log"][-1]
     assert audit.action == "broadcast.cancel"
-    assert audit.ip_address == "1.1.1.1"
+    assert audit.ip_address == "127.0.0.1"
 
 
 @pytest.mark.asyncio

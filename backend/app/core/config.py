@@ -51,6 +51,13 @@ class Settings(BaseSettings):
         default=2.0,
         description="Per-dependency timeout (seconds) for /health checks.",
     )
+    trusted_proxy_ips: str = Field(
+        default="",
+        description=(
+            "Comma-separated IP/CIDR allowlist for peers whose X-Forwarded-For "
+            "headers may be used to resolve the original client IP."
+        ),
+    )
 
     # ---------------------------------------------------------- DB pool tuning
     # See docs/PERFORMANCE.md "PostgreSQL connection pool" for sizing

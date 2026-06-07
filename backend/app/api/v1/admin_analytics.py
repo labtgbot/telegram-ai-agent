@@ -24,6 +24,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from app.auth.dependencies import SessionDep, get_current_admin
+from app.core.client_ip import resolve_client_ip
 from app.core.logging import get_logger
 from app.models.user import User
 from app.services.admin_users import record_audit_event
@@ -57,11 +58,7 @@ logger = get_logger(__name__)
 
 
 def _request_meta(request: Request) -> tuple[str | None, str | None]:
-    ip = (
-        request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-        or (request.client.host if request.client else None)
-    )
-    return ip or None, request.headers.get("user-agent")
+    return resolve_client_ip(request), request.headers.get("user-agent")
 
 
 async def _commit_or_500(session: Any) -> None:
