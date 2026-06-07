@@ -21,7 +21,7 @@ export class UserApi {
   constructor(private readonly client: ApiClient = apiClient) {}
 
   getProfile(): Promise<User> {
-    return this.client.get<User>("/users/me");
+    return this.client.get<User>("/user/me");
   }
 
   getUsageHistory(query: UsageHistoryQuery = {}): Promise<UsageHistoryPage> {
@@ -34,12 +34,12 @@ export class UserApi {
     });
   }
 
-  requestDataExport(payload: DataExportRequest): Promise<DataExportResponse> {
-    return this.client.post<DataExportResponse>("/user/data-export", payload);
+  requestDataExport(_payload: DataExportRequest): Promise<DataExportResponse> {
+    return this.client.get<DataExportResponse>("/user/me/export");
   }
 
   deleteAccount(): Promise<DeleteAccountResponse> {
-    return this.client.delete<DeleteAccountResponse>("/user/account");
+    return this.client.delete<DeleteAccountResponse>("/user/me");
   }
 
   getReferralSummary(): Promise<ReferralSummary> {

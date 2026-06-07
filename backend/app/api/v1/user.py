@@ -8,6 +8,7 @@
 * ``GET /api/v1/user/referral`` — referral code, link and rewards summary.
 * ``GET /api/v1/user/daily-bonus`` — claim status + streak preview.
 * ``POST /api/v1/user/daily-bonus`` — credit today's bonus (idempotent per UTC day).
+* ``GET /api/v1/user/me`` — current Mini App profile.
 * ``GET /api/v1/user/me/export`` — GDPR Art. 15/20 data export (JSON).
 * ``DELETE /api/v1/user/me`` — schedule GDPR Art. 17 anonymisation
   (30-day grace period).
@@ -119,6 +120,42 @@ class DailyBonusClaimResponse(BaseModel):
     next_available_at: datetime
 
 
+class UserProfileResponse(BaseModel):
+    """Public current-user profile returned to the Mini App."""
+
+    id: int
+    telegram_id: int
+    username: str | None
+    first_name: str | None
+    last_name: str | None
+    language_code: str | None
+    role: str
+    referral_code: str
+    is_premium: bool
+    is_banned: bool
+    premium_expires_at: datetime | None = None
+    created_at: datetime | None = None
+    totp_enabled: bool = False
+
+    @classmethod
+    def from_orm_user(cls, user: User) -> UserProfileResponse:
+        return cls(
+            id=user.id,
+            telegram_id=user.telegram_id,
+            username=user.username,
+            first_name=user.first_name,
+            last_name=user.last_name,
+            language_code=user.language_code,
+            role=user.role,
+            referral_code=user.referral_code,
+            is_premium=user.is_premium,
+            is_banned=user.is_banned,
+            premium_expires_at=user.premium_expires_at,
+            created_at=getattr(user, "created_at", None),
+            totp_enabled=bool(getattr(user, "totp_enabled", False)),
+        )
+
+
 def _build_referral_link(bot_username: str, referral_code: str) -> str:
     if not bot_username:
         return f"start=REF:{referral_code}"
@@ -155,6 +192,17 @@ async def _daily_bonus_available(
     service = DailyBonusService(session, redis)
     status_ = await service.status(user_id)
     return status_.available
+
+
+@router.get(
+    "/me",
+    response_model=UserProfileResponse,
+    summary="Current Mini App profile",
+)
+async def get_my_profile(
+    user: Annotated[User, Depends(get_current_user_from_init_data)],
+) -> UserProfileResponse:
+    return UserProfileResponse.from_orm_user(user)
 
 
 @router.get(

@@ -14,13 +14,25 @@ test.describe("settings flow and init-data propagation", () => {
 
     let capturedInitData: string | null = null;
     await page.route(
-      (url) => url.pathname.includes("/user/data-export"),
+      (url) => url.pathname.includes("/user/me/export"),
       async (route) => {
+        expect(route.request().method()).toBe("GET");
         capturedInitData = route.request().headers()["x-telegram-init-data"] ?? null;
         await route.fulfill({
           status: 200,
           contentType: "application/json",
-          body: JSON.stringify({ status: "scheduled", request_id: "exp_1" }),
+          body: JSON.stringify({
+            schema_version: "1.0",
+            generated_at: "2026-06-07T00:00:00+00:00",
+            user: { id: 42 },
+            transactions: [],
+            subscriptions: [],
+            chat_threads: [],
+            chat_messages: [],
+            daily_bonus_claims: [],
+            referrals_summary: { count: 0 },
+            notes: [],
+          }),
         });
       },
     );

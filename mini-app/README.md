@@ -88,7 +88,7 @@ no-op режиме, и используются значения по умолч
 ```ts
 import { apiClient } from "@/services/apiClient";
 
-const me = await apiClient.get<UserPublic>("/users/me");
+const me = await apiClient.get<UserPublic>("/user/me");
 const invoice = await apiClient.post<InvoiceLink>("/payments/invoice", {
   pack_id: "starter",
 });

@@ -18,11 +18,11 @@ describe("ApiClient", () => {
       fetchImpl,
     });
 
-    await client.get("/users/me");
+    await client.get("/user/me");
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0]!;
-    expect(url).toBe("https://api.example.com/v1/users/me");
+    expect(url).toBe("https://api.example.com/v1/user/me");
     const headers = new Headers(init!.headers);
     expect(headers.get("X-Telegram-Init-Data")).toBe("tg-init-payload");
     expect(headers.get("Accept")).toBe("application/json");

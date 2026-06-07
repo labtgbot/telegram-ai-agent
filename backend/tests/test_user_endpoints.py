@@ -7,6 +7,7 @@ runs without external services.  The shape of the fixture follows
 Covered routes:
 
 * ``GET /api/v1/user/balance``
+* ``GET /api/v1/user/me``
 * ``GET /api/v1/user/usage-history``
 * ``GET /api/v1/user/transactions`` (Mini App balance page history)
 * ``GET /api/v1/user/referral`` (Mini App referral link)
@@ -79,6 +80,7 @@ class FakeUser:
         self.total_tokens_purchased = 0
         self.total_tokens_spent = 0
         self.total_requests = 0
+        self.created_at = datetime(2024, 3, 4, tzinfo=UTC)
         self.last_active_at = datetime.now(UTC)
         self.last_login_at = None
 
@@ -375,6 +377,42 @@ def _build_init_data(telegram_id: int = 42) -> str:
 
 async def _client(app: Any) -> AsyncClient:
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+# --------------------------------------------------------------------- /user/me
+
+
+@pytest.mark.asyncio
+async def test_me_returns_current_profile(build_app) -> None:
+    app, *_ = build_app
+    init = _build_init_data(telegram_id=42)
+    async with await _client(app) as c:
+        resp = await c.get(
+            "/api/v1/user/me",
+            headers={"X-Telegram-Init-Data": init},
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["id"] == 42
+    assert body["telegram_id"] == 42
+    assert body["username"] == "alice"
+    assert body["first_name"] == "Alice"
+    assert body["language_code"] == "en"
+    assert body["role"] == "user"
+    assert body["referral_code"] == "REF-42"
+    assert body["is_premium"] is False
+    assert body["is_banned"] is False
+    assert body["created_at"].startswith("2024-03-04")
+    assert body["totp_enabled"] is False
+
+
+@pytest.mark.asyncio
+async def test_me_rejects_missing_init_data(build_app) -> None:
+    app, *_ = build_app
+    async with await _client(app) as c:
+        resp = await c.get("/api/v1/user/me")
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "missing_init_data"
 
 
 # -------------------------------------------------------------- /user/balance
