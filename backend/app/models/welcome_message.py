@@ -18,6 +18,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,6 +58,12 @@ class WelcomeMessage(Base):
     __table_args__ = (
         Index("ix_welcome_messages_locale", "locale"),
         Index("ix_welcome_messages_is_active", "is_active"),
+        Index(
+            "uq_welcome_messages_active_per_locale",
+            "locale",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
     )
 
     def __repr__(self) -> str:

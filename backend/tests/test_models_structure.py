@@ -12,7 +12,14 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Integer  # noqa: E402
+from sqlalchemy import (  # noqa: E402
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Integer,
+    create_mock_engine,
+)
 
 from app.models import (  # noqa: E402
     AccountDeletionRequest,
@@ -23,6 +30,7 @@ from app.models import (  # noqa: E402
     TokenUsageLog,
     Transaction,
     User,
+    WelcomeMessage,
 )
 
 
@@ -99,7 +107,47 @@ def test_transaction_check_constraint():
 
 def test_transaction_indexes_present():
     index_names = {ix.name for ix in Transaction.__table__.indexes}
-    assert {"ix_transactions_user_id", "ix_transactions_type", "ix_transactions_created"} <= index_names
+    assert {
+        "ix_transactions_user_id",
+        "ix_transactions_type",
+        "ix_transactions_created",
+        "uq_transactions_payment_id",
+        "ix_transactions_payment_status",
+    } <= index_names
+
+
+def test_model_create_all_emits_migration_aligned_indexes():
+    statements: list[str] = []
+
+    def capture(sql, *multiparams, **params) -> None:
+        statements.append(str(sql.compile(dialect=engine.dialect)))
+
+    engine = create_mock_engine("postgresql://", capture)
+    Base.metadata.create_all(engine)
+
+    ddl = "\n".join(statements)
+    assert (
+        "CREATE UNIQUE INDEX uq_transactions_payment_id "
+        "ON transactions (payment_id) WHERE payment_id IS NOT NULL"
+    ) in ddl
+    assert "CREATE INDEX ix_transactions_payment_status ON transactions (payment_status)" in ddl
+    assert "CREATE INDEX ix_transactions_created ON transactions (created_at DESC)" in ddl
+    assert (
+        "CREATE INDEX ix_token_usage_logs_created ON token_usage_logs (created_at DESC)"
+    ) in ddl
+    assert (
+        "CREATE UNIQUE INDEX uq_welcome_messages_active_per_locale "
+        "ON welcome_messages (locale) WHERE is_active"
+    ) in ddl
+
+
+def test_welcome_message_indexes_present():
+    index_names = {ix.name for ix in WelcomeMessage.__table__.indexes}
+    assert {
+        "ix_welcome_messages_locale",
+        "ix_welcome_messages_is_active",
+        "uq_welcome_messages_active_per_locale",
+    } <= index_names
 
 
 def test_token_usage_log_is_partitioned():

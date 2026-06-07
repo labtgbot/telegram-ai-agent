@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, desc, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,7 +44,7 @@ class TokenUsageLog(Base):
     __table_args__ = (
         Index("ix_token_usage_logs_user_id", "user_id"),
         Index("ix_token_usage_logs_service", "service_type"),
-        Index("ix_token_usage_logs_created", "created_at", postgresql_using="btree"),
+        Index("ix_token_usage_logs_created", desc("created_at")),
         {"postgresql_partition_by": "RANGE (created_at)"},
     )
 
