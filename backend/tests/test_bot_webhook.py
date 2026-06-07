@@ -283,6 +283,49 @@ async def test_webhook_rejects_wrong_secret(build_app) -> None:
     assert resp.status_code == 401
 
 
+def test_check_secret_uses_constant_time_compare(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api.v1 import bot as bot_route
+
+    compare_calls: list[tuple[str, str]] = []
+
+    class _FakeHmac:
+        @staticmethod
+        def compare_digest(left: str, right: str) -> bool:
+            compare_calls.append((left, right))
+            return True
+
+    monkeypatch.setattr(bot_route, "hmac", _FakeHmac, raising=False)
+
+    bot_route._check_secret("supersecret", "supersecret")
+
+    assert compare_calls == [("supersecret", "supersecret")]
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"X-Telegram-Bot-Api-Secret-Token": "WRONG"},
+    ],
+)
+@pytest.mark.asyncio
+async def test_webhook_rejects_missing_or_wrong_secret_in_production(
+    build_app,
+    settings,
+    headers: dict[str, str],
+) -> None:
+    settings.app_env = "production"
+    settings.app_debug = False
+    settings.telegram_webhook_secret = "prod-supersecret"
+
+    app, _, _ = build_app
+    async with await _client(app) as c:
+        resp = await c.post(WEBHOOK_PATH, json=_start_update(1), headers=headers)
+
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "invalid_webhook_secret"
+
+
 @pytest.mark.asyncio
 async def test_webhook_start_creates_user_and_awards_bonus(build_app) -> None:
     app, store, captured = build_app
