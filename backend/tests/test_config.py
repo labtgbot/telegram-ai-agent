@@ -1,4 +1,5 @@
 """Settings and logging configuration tests."""
+
 from __future__ import annotations
 
 import importlib
@@ -23,6 +24,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.redis_url.startswith("redis://")
     assert s.database_url.startswith("postgresql+asyncpg://")
     assert s.trusted_proxy_ips == ""
+    assert s.telegram_update_idempotency_ttl_seconds == 604800
     assert s.is_development is True
 
 
@@ -31,6 +33,7 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOG_LEVEL", "WARNING")
     monkeypatch.setenv("REDIS_URL", "redis://example:6380/2")
     monkeypatch.setenv("TRUSTED_PROXY_IPS", "10.0.0.0/24, 2001:db8::/32")
+    monkeypatch.setenv("TELEGRAM_UPDATE_IDEMPOTENCY_TTL_SECONDS", "3600")
 
     from app.core import config as config_module
 
@@ -42,6 +45,7 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.log_level == "WARNING"
     assert s.redis_url == "redis://example:6380/2"
     assert s.trusted_proxy_ips == "10.0.0.0/24, 2001:db8::/32"
+    assert s.telegram_update_idempotency_ttl_seconds == 3600
     assert s.is_development is False
 
 
@@ -129,9 +133,7 @@ def test_assert_production_safe_blocks_empty_webhook_secret() -> None:
 def test_assert_production_safe_allows_dev_with_default_secret() -> None:
     config_module = _fresh_config_module()
     for env in ("development", "local", "test", "ci"):
-        config_module.Settings(
-            app_env=env, admin_jwt_secret="change-me"
-        ).assert_production_safe()
+        config_module.Settings(app_env=env, admin_jwt_secret="change-me").assert_production_safe()
 
 
 def test_assert_production_safe_allows_custom_secret_in_production() -> None:

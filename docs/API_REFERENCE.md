@@ -29,7 +29,8 @@ back in sync.
 - User endpoints: `X-Telegram-Init-Data` header (signed by Telegram WebApp).
 - Admin endpoints: `Authorization: Bearer <admin_jwt>` + `X-Admin-ID`.
 - Bot webhook: `POST /api/v1/bot/webhook/{secret}` — secret rotated via
-  `TELEGRAM_WEBHOOK_SECRET`.
+  `TELEGRAM_WEBHOOK_SECRET`; processed Telegram `update_id` values are
+  remembered in Redis to short-circuit redeliveries.
 - Health probes (`/health`, `/health/live`, `/health/ready`) are public.
 
 ## User Endpoints

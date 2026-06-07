@@ -11,6 +11,7 @@ We mock:
 
 The shape of these tests mirrors ``test_auth_endpoints.py`` for consistency.
 """
+
 from __future__ import annotations
 
 import json
@@ -45,6 +46,7 @@ class _FakeSettings:
     telegram_webhook_secret = "supersecret"
     telegram_mini_app_url = ""
     telegram_signup_bonus_tokens = 50
+    telegram_update_idempotency_ttl_seconds = 604800
     telegram_init_data_max_age = 86400
     telegram_set_commands_on_startup = False
 
@@ -95,9 +97,36 @@ class _Store:
     next_id: int = 1
 
 
+class _FakeRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.ttls: dict[str, int] = {}
+
+    async def set(self, key: str, value: str, *, ex: int, nx: bool) -> bool:
+        if nx and key in self.values:
+            return False
+        self.values[key] = value
+        self.ttls[key] = ex
+        return True
+
+    async def delete(self, *keys: str) -> int:
+        deleted = 0
+        for key in keys:
+            if key in self.values:
+                deleted += 1
+                self.values.pop(key, None)
+                self.ttls.pop(key, None)
+        return deleted
+
+
 @pytest.fixture
 def store() -> _Store:
     return _Store()
+
+
+@pytest.fixture
+def fake_redis() -> _FakeRedis:
+    return _FakeRedis()
 
 
 @pytest.fixture
@@ -111,7 +140,7 @@ def settings() -> _FakeSettings:
 
 
 @pytest.fixture
-def build_app(monkeypatch, store, captured_requests, settings):
+def build_app(monkeypatch, store, fake_redis, captured_requests, settings):
     """Wire the FastAPI app with stubbed DB/Telegram so the webhook is callable."""
     from app.api.v1 import bot as bot_route
     from app.auth import dependencies as deps
@@ -174,17 +203,11 @@ def build_app(monkeypatch, store, captured_requests, settings):
     async def fake_get_session():
         yield _SessionStub()
 
-    monkeypatch.setattr(
-        users_module, "find_user_by_telegram_id", fake_find_user_by_telegram_id
-    )
+    monkeypatch.setattr(users_module, "find_user_by_telegram_id", fake_find_user_by_telegram_id)
     monkeypatch.setattr(users_module, "upsert_telegram_user", fake_upsert)
-    monkeypatch.setattr(
-        handlers_module, "find_user_by_telegram_id", fake_find_user_by_telegram_id
-    )
+    monkeypatch.setattr(handlers_module, "find_user_by_telegram_id", fake_find_user_by_telegram_id)
     monkeypatch.setattr(bot_users_service, "upsert_telegram_user", fake_upsert)
-    monkeypatch.setattr(
-        bot_users_service, "_find_user_by_referral_code", fake_find_by_referral
-    )
+    monkeypatch.setattr(bot_users_service, "_find_user_by_referral_code", fake_find_by_referral)
 
     # --- settings + bot client -------------------------------------------
 
@@ -212,9 +235,7 @@ def build_app(monkeypatch, store, captured_requests, settings):
     )
 
     monkeypatch.setattr(bot_route, "get_bot_client", lambda: fake_client)
-    monkeypatch.setattr(
-        "app.core.config.get_settings", lambda: settings, raising=True
-    )
+    monkeypatch.setattr("app.core.config.get_settings", lambda: settings, raising=True)
     monkeypatch.setattr(deps, "get_settings", lambda: settings)
 
     app = create_app()
@@ -226,6 +247,7 @@ def build_app(monkeypatch, store, captured_requests, settings):
     app.dependency_overrides[real_get_session] = fake_get_session
     app.dependency_overrides[_settings_dep] = lambda: settings
     app.dependency_overrides[original_get_bot_client] = lambda: fake_client
+    app.dependency_overrides[bot_route._redis_dep] = lambda: fake_redis
 
     yield app, store, captured_requests
 
@@ -363,6 +385,36 @@ async def test_webhook_start_does_not_re_award_bonus(build_app) -> None:
     assert store.by_telegram[33].token_balance == 50  # only credited once
     bonus_tx = [tx for tx in store.transactions if tx["type"] == "bonus"]
     assert len(bonus_tx) == 1
+
+
+@pytest.mark.asyncio
+async def test_webhook_short_circuits_duplicate_update_id(
+    build_app, fake_redis, settings, monkeypatch
+) -> None:
+    app, _, _ = build_app
+
+    from app.api.v1 import bot as bot_route
+
+    dispatched: list[int] = []
+
+    async def fake_dispatch(update: dict[str, Any], **_kwargs: Any) -> None:
+        dispatched.append(int(update["update_id"]))
+
+    monkeypatch.setattr(bot_route, "dispatch_update", fake_dispatch)
+
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "supersecret"}
+    update = _start_update(33)
+    async with await _client(app) as c:
+        first = await c.post(WEBHOOK_PATH, json=update, headers=headers)
+        second = await c.post(WEBHOOK_PATH, json=update, headers=headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert dispatched == [1]
+    assert fake_redis.values == {"bot:webhook:update:1": "1"}
+    assert fake_redis.ttls == {
+        "bot:webhook:update:1": settings.telegram_update_idempotency_ttl_seconds
+    }
 
 
 @pytest.mark.asyncio

@@ -207,6 +207,7 @@ Required in production:
 | `TELEGRAM_BOT_TOKEN` | Yes | Bot token from BotFather. |
 | `TELEGRAM_BOT_USERNAME` | Recommended | Bot username without `@`; used in referral links. |
 | `TELEGRAM_WEBHOOK_SECRET` | Yes | Sent to Telegram and checked on webhook requests. |
+| `TELEGRAM_UPDATE_IDEMPOTENCY_TTL_SECONDS` | Optional | Redis TTL for processed Telegram `update_id` keys; defaults to 7 days. |
 | `TELEGRAM_MINI_APP_URL` | Yes | Public Mini App URL, normally `https://bot.example.com/`. |
 | `ADMIN_JWT_SECRET` | Yes | Long random string for admin JWT signing. |
 | `ADMIN_SUPER_TELEGRAM_IDS` | Yes for admin access | Comma-separated Telegram user IDs that become `super_admin`. |

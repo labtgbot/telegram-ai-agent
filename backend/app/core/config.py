@@ -124,6 +124,13 @@ class Settings(BaseSettings):
         default=86400,
         description="Maximum age (seconds) of WebApp initData accepted by the API.",
     )
+    telegram_update_idempotency_ttl_seconds: int = Field(
+        default=7 * 24 * 60 * 60,
+        description=(
+            "TTL for Redis keys that remember processed Telegram webhook update_id "
+            "values. Keeps redeliveries from re-running non-idempotent bot handlers."
+        ),
+    )
     telegram_webhook_secret: str = Field(
         default="",
         description=(
