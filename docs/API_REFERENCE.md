@@ -34,6 +34,28 @@ back in sync.
 
 ## User Endpoints
 
+### GET /user/me
+
+Returns the current Mini App profile for the authenticated Telegram user.
+
+```json
+{
+  "id": 42,
+  "telegram_id": 100200,
+  "username": "alice",
+  "first_name": "Alice",
+  "last_name": null,
+  "language_code": "en",
+  "role": "user",
+  "referral_code": "ABC123",
+  "is_premium": false,
+  "is_banned": false,
+  "premium_expires_at": null,
+  "created_at": "2024-03-04T00:00:00+00:00",
+  "totp_enabled": false
+}
+```
+
 ### GET /user/balance
 ```json
 {
@@ -110,6 +132,26 @@ Idempotency: even with two parallel requests, exactly one credit is recorded
 (`transactions.payment_id = "daily_bonus:user:<id>:date:<YYYY-MM-DD>"`) and
 the duplicate insert into `daily_bonus_claims` is rejected by the
 `(user_id, claim_date)` UNIQUE constraint.
+
+### GET /user/me/export
+
+Returns a JSON export of the authenticated user's account data.
+
+### DELETE /user/me
+
+Schedules account anonymisation with a 30-day grace period.
+
+Response (`202`):
+
+```json
+{
+  "request_id": 99,
+  "status": "pending",
+  "requested_at": "2026-06-07T00:00:00+00:00",
+  "scheduled_for": "2026-07-07T00:00:00+00:00",
+  "detail": "deletion_scheduled"
+}
+```
 
 ## Payment Endpoints
 
@@ -231,9 +273,9 @@ Issues `refundStarPayment` upstream + inserts a compensating row in
 | Method | Path                          | Purpose                                                 |
 |--------|-------------------------------|---------------------------------------------------------|
 | `POST` | `/compliance/age-verify`      | One-shot age confirmation; sets `users.age_verified`.   |
-| `POST` | `/user/export`                | Async export of the caller's data; result posted to bot.|
-| `DELETE` | `/user/account`             | Schedules account deletion with a 30-day grace period.  |
-| `POST` | `/user/account/cancel-deletion` | Cancels a pending deletion within the grace window.  |
+| `GET` | `/user/me/export`             | JSON export of the caller's account data.               |
+| `DELETE` | `/user/me`                  | Schedules account deletion with a 30-day grace period.  |
+| `POST` | `/user/me/cancel-deletion`   | Cancels a pending deletion within the grace window.     |
 
 Public legal text is served as Markdown by the app shell:
 `GET /privacy`, `GET /terms` (not under `/api/v1`).

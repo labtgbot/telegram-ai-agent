@@ -22,7 +22,7 @@ test.describe("onboarding via Telegram WebApp mock", () => {
       next_available_at: "2026-05-17T00:00:00+00:00",
       amounts: [10, 12, 15, 20],
     });
-    await mockApi(page, "/users/me", {
+    await mockApi(page, "/user/me", {
       id: 1,
       telegram_id: 100200,
       username: "ada",
@@ -58,7 +58,7 @@ test.describe("onboarding via Telegram WebApp mock", () => {
     });
     await mockApi(
       page,
-      "/users/me",
+      "/user/me",
       {
         id: 1,
         telegram_id: 100201,
@@ -104,7 +104,7 @@ test.describe("onboarding via Telegram WebApp mock", () => {
     });
     await mockApi(
       page,
-      "/users/me",
+      "/user/me",
       { detail: "Not found" },
       { method: "GET", status: 404 },
     );

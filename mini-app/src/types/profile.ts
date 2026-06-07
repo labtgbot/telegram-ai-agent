@@ -39,12 +39,24 @@ export interface DataExportRequest {
 }
 
 export interface DataExportResponse {
-  status: "queued" | "sent";
-  email: string;
+  schema_version: string;
+  generated_at: string;
+  user: Record<string, unknown>;
+  transactions: Record<string, unknown>[];
+  subscriptions: Record<string, unknown>[];
+  chat_threads: Record<string, unknown>[];
+  chat_messages: Record<string, unknown>[];
+  daily_bonus_claims: Record<string, unknown>[];
+  referrals_summary: Record<string, number>;
+  notes: string[];
 }
 
 export interface DeleteAccountResponse {
-  status: "queued" | "deleted";
+  request_id: number;
+  status: "pending";
+  requested_at: string;
+  scheduled_for: string;
+  detail: string;
 }
 
 export interface ReferralSummary {

@@ -70,7 +70,18 @@ describe("SettingsPage", () => {
   });
 
   it("submits a valid export request and shows confirmation", async () => {
-    requestExportMock.mockResolvedValue({ status: "queued", email: "me@example.com" });
+    requestExportMock.mockResolvedValue({
+      schema_version: "1.0",
+      generated_at: "2026-06-07T00:00:00Z",
+      user: {},
+      transactions: [],
+      subscriptions: [],
+      chat_threads: [],
+      chat_messages: [],
+      daily_bonus_claims: [],
+      referrals_summary: { count: 0 },
+      notes: [],
+    });
     render(<SettingsPage />);
     await userEvent.type(screen.getByLabelText("Email"), "me@example.com");
     await userEvent.click(screen.getByRole("button", { name: "Request export" }));
@@ -91,7 +102,13 @@ describe("SettingsPage", () => {
   });
 
   it("opens the delete-account confirm dialog and requires the typed token", async () => {
-    deleteAccountMock.mockResolvedValue({ status: "queued" });
+    deleteAccountMock.mockResolvedValue({
+      request_id: 7,
+      status: "pending",
+      requested_at: "2026-06-07T00:00:00Z",
+      scheduled_for: "2026-07-07T00:00:00Z",
+      detail: "deletion_scheduled",
+    });
     render(<SettingsPage />);
 
     await userEvent.click(screen.getByRole("button", { name: "Delete my account" }));
