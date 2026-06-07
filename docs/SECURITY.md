@@ -33,10 +33,9 @@
 6. Проверяем, что `auth_date` не старше `TELEGRAM_INIT_DATA_MAX_AGE`
    (по умолчанию — 24 часа) — защита от replay-атак.
 
-Эндпоинт `POST /api/v1/auth/telegram/verify` принимает заголовок
-`X-Telegram-Init-Data` (или query-параметр `initData` для удобства
-мини-приложений), создаёт пользователя при первом обращении (с
-автогенерируемым `referral_code`) и возвращает актуальную запись.
+Эндпоинт `POST /api/v1/auth/telegram/verify` принимает `initData` только в
+заголовке `X-Telegram-Init-Data`, создаёт пользователя при первом обращении
+(с автогенерируемым `referral_code`) и возвращает актуальную запись.
 
 ### Admin Login
 
