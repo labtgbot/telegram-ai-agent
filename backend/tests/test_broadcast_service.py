@@ -10,6 +10,8 @@ Tests skip automatically when no PostgreSQL is available (see
 """
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -26,6 +28,7 @@ from app.models.broadcast import (
     BROADCAST_STATUS_CANCELLED,
     BROADCAST_STATUS_COMPLETED,
     BROADCAST_STATUS_DRAFT,
+    BROADCAST_STATUS_IN_PROGRESS,
     BROADCAST_STATUS_SCHEDULED,
     RECIPIENT_STATUS_DELIVERED,
     RECIPIENT_STATUS_FAILED,
@@ -39,6 +42,7 @@ from app.services.broadcast import (
     BROADCAST_AUDIT_CANCEL,
     BROADCAST_AUDIT_CREATE,
     BROADCAST_AUDIT_FINISH,
+    BROADCAST_DRAIN_STALE_AFTER,
     BroadcastButton,
     BroadcastDraft,
     BroadcastNotCancellableError,
@@ -541,6 +545,7 @@ async def test_get_broadcast_stats_aggregates(db_session) -> None:
 async def test_list_due_broadcasts_picks_drafts_and_due_scheduled(db_session) -> None:
     admin = await _make_user(db_session, role="support_admin")
     u = await _make_user(db_session)
+    now = datetime.now(UTC)
 
     draft_b = await create_broadcast(
         db_session,
@@ -551,8 +556,8 @@ async def test_list_due_broadcasts_picks_drafts_and_due_scheduled(db_session) ->
         ),
     )
 
-    past = datetime.now(UTC) - timedelta(hours=1)
-    future = datetime.now(UTC) + timedelta(hours=1)
+    past = now - timedelta(hours=1)
+    future = now + timedelta(hours=1)
     due_scheduled = Broadcast(
         created_by=admin.id,
         text="due",
@@ -567,14 +572,32 @@ async def test_list_due_broadcasts_picks_drafts_and_due_scheduled(db_session) ->
         status=BROADCAST_STATUS_SCHEDULED,
         scheduled_at=future,
     )
-    db_session.add_all([due_scheduled, future_scheduled])
+    fresh_in_progress = Broadcast(
+        created_by=admin.id,
+        text="fresh active",
+        audience=BROADCAST_AUDIENCE_ALL,
+        status=BROADCAST_STATUS_IN_PROGRESS,
+        started_at=now - timedelta(minutes=1),
+        updated_at=now - timedelta(minutes=1),
+    )
+    stale_in_progress = Broadcast(
+        created_by=admin.id,
+        text="stale active",
+        audience=BROADCAST_AUDIENCE_ALL,
+        status=BROADCAST_STATUS_IN_PROGRESS,
+        started_at=now - BROADCAST_DRAIN_STALE_AFTER - timedelta(minutes=1),
+        updated_at=now - BROADCAST_DRAIN_STALE_AFTER - timedelta(seconds=1),
+    )
+    db_session.add_all([due_scheduled, future_scheduled, fresh_in_progress, stale_in_progress])
     await db_session.flush()
 
-    due = await list_due_broadcasts(db_session, now=datetime.now(UTC))
+    due = await list_due_broadcasts(db_session, now=now)
     due_ids = {b.id for b in due}
     assert draft_b.id in due_ids
     assert due_scheduled.id in due_ids
     assert future_scheduled.id not in due_ids
+    assert fresh_in_progress.id not in due_ids
+    assert stale_in_progress.id in due_ids
 
 
 # ---------------------------------------------------------------- record_recipient_result
@@ -882,6 +905,140 @@ async def test_drain_broadcast_stops_when_cancelled_mid_flight(db_session) -> No
     )
     assert drained.status == BROADCAST_STATUS_CANCELLED
     assert client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_drains_send_each_recipient_once(db_engine) -> None:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    broadcast_id: int | None = None
+    user_ids: list[int] = []
+    telegram_ids: list[int] = []
+
+    async with factory() as setup:
+        admin = await _make_user(setup, username="broadcast-race-admin", role="support_admin")
+        users = [
+            await _make_user(setup, username="broadcast-race-1"),
+            await _make_user(setup, username="broadcast-race-2"),
+        ]
+        broadcast = await create_broadcast(
+            setup,
+            admin=admin,
+            draft=_draft(
+                audience=BROADCAST_AUDIENCE_CUSTOM,
+                audience_filter={"telegram_ids": [u.telegram_id for u in users]},
+            ),
+        )
+        await setup.commit()
+        broadcast_id = int(broadcast.id)
+        user_ids = [int(admin.id), *(int(u.id) for u in users)]
+        telegram_ids = [int(u.telegram_id) for u in users]
+
+    first_send_started = asyncio.Event()
+    release_first_send = asyncio.Event()
+    calls_lock = asyncio.Lock()
+    calls: list[tuple[str, int]] = []
+
+    class _BlockingTelegramClient:
+        def __init__(self, worker: str) -> None:
+            self.worker = worker
+            self.calls: list[dict[str, Any]] = []
+
+        async def send_message(
+            self,
+            *,
+            chat_id: int,
+            text: str,
+            parse_mode: str | None = None,
+            disable_web_page_preview: bool | None = True,
+            reply_markup: dict[str, Any] | None = None,
+        ) -> Any:
+            payload = {
+                "method": "send_message",
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": parse_mode,
+                "reply_markup": reply_markup,
+            }
+            self.calls.append(payload)
+            async with calls_lock:
+                calls.append((self.worker, chat_id))
+                first_call = len(calls) == 1
+                if first_call:
+                    first_send_started.set()
+            if first_call:
+                await release_first_send.wait()
+            return {"message_id": chat_id * 10}
+
+    async def fake_sleep(_seconds: float) -> None:
+        return None
+
+    async def attempt(worker: str) -> list[dict[str, Any]]:
+        assert broadcast_id is not None
+        async with factory() as session:
+            broadcast = await session.get(Broadcast, broadcast_id)
+            assert broadcast is not None
+            client = _BlockingTelegramClient(worker)
+            await drain_broadcast(
+                session,
+                client,
+                broadcast=broadcast,
+                rate_limit=50,
+                sleeper=fake_sleep,
+            )
+            return client.calls
+
+    first: asyncio.Task[list[dict[str, Any]]] | None = None
+    second: asyncio.Task[list[dict[str, Any]]] | None = None
+
+    try:
+        first = asyncio.create_task(attempt("first"))
+        await asyncio.wait_for(first_send_started.wait(), timeout=5)
+
+        second = asyncio.create_task(attempt("second"))
+        await asyncio.wait_for(second, timeout=5)
+
+        release_first_send.set()
+        await asyncio.wait_for(first, timeout=5)
+
+        delivered_chat_ids = [chat_id for _worker, chat_id in calls]
+        assert sorted(delivered_chat_ids) == sorted(telegram_ids)
+
+        async with factory() as verify:
+            rows = (
+                await verify.execute(
+                    select(BroadcastRecipient).where(
+                        BroadcastRecipient.broadcast_id == broadcast_id
+                    )
+                )
+            ).scalars().all()
+            assert {int(row.telegram_id) for row in rows} == set(telegram_ids)
+            assert all(row.status == RECIPIENT_STATUS_DELIVERED for row in rows)
+            broadcast = await verify.get(Broadcast, broadcast_id)
+            assert broadcast is not None
+            assert broadcast.delivered_count == len(telegram_ids)
+    finally:
+        release_first_send.set()
+        for task in (second, first):
+            if task is not None and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        async with factory() as cleanup:
+            if user_ids:
+                await cleanup.execute(
+                    AdminAuditLog.__table__.delete().where(AdminAuditLog.admin_id.in_(user_ids))
+                )
+            if broadcast_id is not None:
+                broadcast = await cleanup.get(Broadcast, broadcast_id)
+                if broadcast is not None:
+                    await cleanup.delete(broadcast)
+            for user_id in user_ids:
+                user = await cleanup.get(User, user_id)
+                if user is not None:
+                    await cleanup.delete(user)
+            await cleanup.commit()
 
 
 # ---------------------------------------------------------------- send_one helpers

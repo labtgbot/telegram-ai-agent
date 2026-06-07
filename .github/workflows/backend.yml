@@ -339,10 +339,10 @@ jobs:
             --csv=load/out/smoke \
             --exit-code-on-error 1
 
-      - name: Check SLO (p95 < 500 ms, no failures)
+      - name: Check smoke budget (p95 <= 600 ms, no failures)
         run: |
           python load/check_results.py load/out/smoke_stats.csv \
-            --max-p95-ms 500 \
+            --max-p95-ms 600 \
             --max-failure-ratio 0.0 \
             --min-rps 10
 

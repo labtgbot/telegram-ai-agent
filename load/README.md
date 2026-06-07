@@ -60,9 +60,12 @@ across machines.
 
 ## CI smoke
 
-CI runs a 20-second smoke profile with 20 users (~50 RPS) to catch
-regressions cheaply. The full 100-RPS run is intended for nightly /
-on-demand jobs because it puts measurable load on the box.
+CI runs a 20-second smoke profile with 20 users to catch regressions
+cheaply on GitHub-hosted runners. The smoke gate keeps failures at zero,
+requires Locust to generate traffic, and allows p95 up to 600 ms to avoid
+failing on normal runner variance. The full 100-RPS, p95 < 500 ms run is
+intended for nightly / on-demand jobs because it puts measurable load on
+the box.
 
 ## Environment variables
 
