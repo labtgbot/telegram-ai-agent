@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.client import TelegramApiError, TelegramClient
 from app.bot.commands import BOT_COMMANDS
 from app.bot.keyboards import balance_actions, main_menu, referral_share
+from app.bot.rate_limit import format_rate_limit_message, upgrade_keyboard
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.redis import get_redis
@@ -40,6 +41,17 @@ from app.services.payments import (
     InvoicePayloadInvalidError,
     PackageNotFoundError,
     PaymentService,
+)
+from app.services.rate_limit_config import (
+    ACTION_IMAGE,
+    ACTION_TEXT,
+    ACTION_VIDEO,
+    load_rate_limits,
+)
+from app.services.rate_limiter import (
+    RateLimitedError,
+    RateLimiter,
+    resolve_plan_for_user,
 )
 from app.services.text_generation import (
     MODE_AGENT,
@@ -151,6 +163,50 @@ def _parse_start_payload(text: str | None) -> str | None:
     if len(parts) < 2:
         return None
     return parts[1].strip() or None
+
+
+async def _consume_generation_rate_limit(
+    ctx: HandlerContext,
+    *,
+    user: Any,
+    action: str,
+) -> bool:
+    """Consume the bot-side generation quota for ``action``.
+
+    Mirrors the FastAPI rate-limit dependency: the bucket is keyed by the
+    Telegram user id and the user's active plan decides which quota catalog
+    applies. Returns ``False`` after sending the rate-limit reply.
+    """
+    if ctx.chat_id is None:
+        return False
+
+    config = await load_rate_limits(ctx.session)
+    limiter = RateLimiter(get_redis(), config)
+    plan = await resolve_plan_for_user(ctx.session, user)
+
+    try:
+        await limiter.consume(
+            plan=plan,
+            identifier=str(user.telegram_id),
+            action=action,
+        )
+    except RateLimitedError as exc:
+        logger.info(
+            "bot.rate_limit.blocked",
+            user_id=user.id,
+            telegram_id=user.telegram_id,
+            plan=exc.plan,
+            action=exc.action,
+            quota=exc.quota_key,
+        )
+        await ctx.client.send_message(
+            ctx.chat_id,
+            format_rate_limit_message(exc),
+            reply_markup=upgrade_keyboard(exc),
+        )
+        return False
+
+    return True
 
 
 # ----------------------------------------------------------------- commands
@@ -344,6 +400,9 @@ async def handle_image(ctx: HandlerContext) -> None:
         )
         return
 
+    if not await _consume_generation_rate_limit(ctx, user=user, action=ACTION_IMAGE):
+        return
+
     if ctx.composio is None:
         logger.error("bot.image.composio_unconfigured", user_id=user.id)
         await ctx.client.send_message(
@@ -503,6 +562,9 @@ async def handle_video(ctx: HandlerContext) -> None:
             ctx.chat_id,
             "I don't recognise you yet — send /start to register.",
         )
+        return
+
+    if not await _consume_generation_rate_limit(ctx, user=user, action=ACTION_VIDEO):
         return
 
     if ctx.composio is None:
@@ -671,6 +733,9 @@ async def _run_text_mode(ctx: HandlerContext, *, mode: str, label: str) -> None:
             ctx.chat_id,
             "I don't recognise you yet — send /start to register.",
         )
+        return
+
+    if not await _consume_generation_rate_limit(ctx, user=user, action=ACTION_TEXT):
         return
 
     if ctx.composio is None:
