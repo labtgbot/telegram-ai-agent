@@ -760,6 +760,16 @@ async def test_audit_log_endpoint_lists_entries(build_app) -> None:
 
 
 @pytest.mark.asyncio
+async def test_audit_log_requires_support_admin(build_app) -> None:
+    state = build_app
+    state["current_admin"]["user"] = state["users"][2]  # analyst
+    async with await _client(state["app"]) as c:
+        resp = await c.get("/api/v1/admin/audit-log")
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "insufficient_role"
+
+
+@pytest.mark.asyncio
 async def test_audit_log_filters_by_action(build_app) -> None:
     state = build_app
     async with await _client(state["app"]) as c:

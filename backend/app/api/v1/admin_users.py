@@ -1,7 +1,8 @@
 """Admin User Management endpoints (Phase 3, issue #25).
 
 All routes require an authenticated admin (``analyst`` or higher); ban,
-unban, add-tokens and direct-message require ``support_admin`` or higher.
+unban, add-tokens, direct-message and audit-log reads require
+``support_admin`` or higher.
 Every mutation writes an :class:`app.models.admin_audit_log.AdminAuditLog`
 row in the same transaction, so a rolled-back request never leaves a
 "phantom" log entry behind.
@@ -622,7 +623,7 @@ async def send_message_endpoint(
 )
 async def list_audit_log_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
     admin_id: Annotated[int | None, Query()] = None,
     target_user_id: Annotated[int | None, Query()] = None,
     action: Annotated[str | None, Query(max_length=64)] = None,
