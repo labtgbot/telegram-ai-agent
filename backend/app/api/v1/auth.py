@@ -12,11 +12,12 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.rate_limit import RateLimiterDep
 from app.auth.dependencies import (
     SessionDep,
     SettingsDep,
@@ -32,6 +33,7 @@ from app.auth.jwt import (
 )
 from app.auth.rbac import Role, role_satisfies
 from app.auth.totp import verify_totp
+from app.core.client_ip import resolve_client_ip
 from app.core.logging import get_logger
 from app.core.redis import get_redis
 from app.models.user import User
@@ -42,6 +44,12 @@ from app.services.admin_login import (
     request_admin_login,
     verify_admin_login,
 )
+from app.services.rate_limit_config import (
+    ACTION_ADMIN_LOGIN_REQUEST,
+    ACTION_ADMIN_LOGIN_VERIFY,
+    PLAN_ADMIN_LOGIN,
+)
+from app.services.rate_limiter import RateLimitedError
 from app.services.users import (
     find_user_by_telegram_id,
     record_admin_login,
@@ -165,17 +173,72 @@ async def _require_admin_candidate(
     return user
 
 
+def _admin_login_rate_limit_identifiers(request: Request, telegram_id: int) -> tuple[str, str]:
+    client_ip = resolve_client_ip(request) or "unknown"
+    return (f"ip:{client_ip}", f"telegram_id:{telegram_id}")
+
+
+async def _enforce_admin_login_rate_limit(
+    *,
+    request: Request,
+    limiter: RateLimiterDep,
+    telegram_id: int,
+    action: str,
+) -> None:
+    for identifier in _admin_login_rate_limit_identifiers(request, telegram_id):
+        try:
+            await limiter.consume(
+                plan=PLAN_ADMIN_LOGIN,
+                identifier=identifier,
+                action=action,
+            )
+        except RateLimitedError as exc:
+            headers = {
+                "Retry-After": str(exc.retry_after),
+                "X-RateLimit-Limit": str(exc.limit),
+                "X-RateLimit-Remaining": "0",
+                "X-RateLimit-Reset": str(exc.reset_after),
+                "X-RateLimit-Quota": exc.quota_key,
+            }
+            logger.info(
+                "auth.admin.login.rate_limited",
+                action=action,
+                identifier=identifier,
+                quota=exc.quota_key,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail={
+                    "error": "rate_limited",
+                    "plan": PLAN_ADMIN_LOGIN,
+                    "action": action,
+                    "quota": exc.quota_key,
+                    "limit": exc.limit,
+                    "retry_after": exc.retry_after,
+                },
+                headers=headers,
+            ) from exc
+
+
 @router.post(
     "/admin/login/request",
     response_model=AdminLoginRequestResponse,
     summary="Issue a one-time admin login code",
 )
 async def admin_login_request(
+    request: Request,
     payload: AdminLoginRequest,
     settings: SettingsDep,
     session: SessionDep,
     redis: RedisDep,
+    limiter: RateLimiterDep,
 ) -> AdminLoginRequestResponse:
+    await _enforce_admin_login_rate_limit(
+        request=request,
+        limiter=limiter,
+        telegram_id=payload.telegram_id,
+        action=ACTION_ADMIN_LOGIN_REQUEST,
+    )
     user = await _require_admin_candidate(session, payload.telegram_id)
     login = await request_admin_login(
         redis,
@@ -203,11 +266,19 @@ async def admin_login_request(
     summary="Exchange a one-time code (+ optional TOTP) for JWTs",
 )
 async def admin_login_verify(
+    request: Request,
     payload: AdminLoginVerifyRequest,
     settings: SettingsDep,
     session: SessionDep,
     redis: RedisDep,
+    limiter: RateLimiterDep,
 ) -> TokenPairResponse:
+    await _enforce_admin_login_rate_limit(
+        request=request,
+        limiter=limiter,
+        telegram_id=payload.telegram_id,
+        action=ACTION_ADMIN_LOGIN_VERIFY,
+    )
     user = await _require_admin_candidate(session, payload.telegram_id)
 
     try:

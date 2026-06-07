@@ -4,11 +4,14 @@ from __future__ import annotations
 import pytest
 
 from app.services.rate_limit_config import (
+    ACTION_ADMIN_LOGIN_REQUEST,
+    ACTION_ADMIN_LOGIN_VERIFY,
     ACTION_DEFAULT,
     ACTION_IMAGE,
     ACTION_VIDEO,
     ACTION_VOICE,
     DEFAULT_RATE_LIMITS,
+    PLAN_ADMIN_LOGIN,
     PLAN_ANONYMOUS,
     PLAN_FREE,
     PLAN_PREMIUM,
@@ -25,6 +28,7 @@ def test_default_catalog_covers_every_plan() -> None:
     assert PLAN_FREE in DEFAULT_RATE_LIMITS
     assert PLAN_PREMIUM in DEFAULT_RATE_LIMITS
     assert PLAN_PRO in DEFAULT_RATE_LIMITS
+    assert PLAN_ADMIN_LOGIN in DEFAULT_RATE_LIMITS
 
 
 def test_default_free_plan_matches_adr_table() -> None:
@@ -52,6 +56,14 @@ def test_anonymous_has_only_hourly() -> None:
     anon = DEFAULT_RATE_LIMITS[PLAN_ANONYMOUS]
     assert "per_hour" in anon
     assert "per_day" not in anon
+
+
+def test_admin_login_defaults_match_adr() -> None:
+    admin_login = DEFAULT_RATE_LIMITS[PLAN_ADMIN_LOGIN]
+    assert admin_login["request_per_15m"].limit == 5
+    assert admin_login["request_per_15m"].window_seconds == 15 * 60
+    assert admin_login["verify_per_15m"].limit == 5
+    assert admin_login["verify_per_15m"].window_seconds == 15 * 60
 
 
 # -------------------------------------------------------------- RateLimitRule
@@ -178,6 +190,20 @@ def test_rules_for_voice_includes_voice_per_day() -> None:
     rules = cfg.rules_for(PLAN_FREE, ACTION_VOICE)
     keys = [k for k, _ in rules]
     assert keys == ["per_hour", "per_day", "voice_per_day"]
+
+
+def test_rules_for_admin_login_request_uses_request_window() -> None:
+    cfg = RateLimitConfig(plans=dict(DEFAULT_RATE_LIMITS))
+    rules = cfg.rules_for(PLAN_ADMIN_LOGIN, ACTION_ADMIN_LOGIN_REQUEST)
+    keys = [k for k, _ in rules]
+    assert keys == ["request_per_15m"]
+
+
+def test_rules_for_admin_login_verify_uses_verify_window() -> None:
+    cfg = RateLimitConfig(plans=dict(DEFAULT_RATE_LIMITS))
+    rules = cfg.rules_for(PLAN_ADMIN_LOGIN, ACTION_ADMIN_LOGIN_VERIFY)
+    keys = [k for k, _ in rules]
+    assert keys == ["verify_per_15m"]
 
 
 def test_rules_for_skips_missing_buckets() -> None:

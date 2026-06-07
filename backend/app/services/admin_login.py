@@ -9,7 +9,8 @@ The flow has three steps:
    returned in the response so e2e tests can complete without a bot.
 2. ``verify_admin_login`` — admin posts ``telegram_id`` + ``code`` (and the
    ``totp_code`` if 2FA is enabled).  We compare the hash in constant time,
-   delete the key, and let the caller mint JWTs.
+   track failed attempts independently from code re-issuance, delete the key,
+   and let the caller mint JWTs.
 3. Subsequent JWT refresh uses :func:`app.auth.jwt.decode_token` directly.
 
 Storing the salted SHA-256 hash (rather than the code itself) means a Redis
@@ -95,7 +96,6 @@ async def request_admin_login(
     code = _generate_numeric_code(code_length)
     digest = _hash_code(code, salt=secret)
     await redis.set(_key("hash", telegram_id), digest, ex=ttl_seconds)
-    await redis.delete(_key("attempts", telegram_id))
     return AdminLoginCode(code=code, ttl_seconds=ttl_seconds)
 
 
@@ -128,7 +128,7 @@ async def verify_admin_login(
     if attempts == 1:
         await redis.expire(attempts_key, ttl_seconds)
     if attempts > max_attempts:
-        await redis.delete(_key("hash", telegram_id), attempts_key)
+        await redis.delete(_key("hash", telegram_id))
         raise LoginCodeAttemptsExceededError("too many attempts")
 
     expected = _hash_code(code.strip(), salt=secret)
