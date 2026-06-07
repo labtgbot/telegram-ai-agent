@@ -251,7 +251,10 @@ class ImageGenerationResponse(BaseModel):
     "/image",
     response_model=ImageGenerationResponse,
     summary="Generate an image and debit tokens by quality tier",
-    dependencies=[Depends(rate_limit(action="image"))],
+    dependencies=[
+        Depends(get_current_user_from_init_data),
+        Depends(rate_limit(action="image")),
+    ],
 )
 async def generate_image(
     body: ImageGenerationRequest,
@@ -466,7 +469,10 @@ def _to_response(view: VideoJobView) -> VideoJobResponse:
     response_model=VideoJobResponse,
     status_code=status.HTTP_202_ACCEPTED,
     summary="Submit an async video generation job; debits tokens by tariff",
-    dependencies=[Depends(rate_limit(action="video"))],
+    dependencies=[
+        Depends(get_current_user_from_init_data),
+        Depends(rate_limit(action="video")),
+    ],
 )
 async def generate_video(
     body: VideoGenerationRequest,
@@ -801,7 +807,10 @@ def _raise_text_error(
     "/text",
     response_model=TextGenerationResponse,
     summary="Generate text (basic / advanced / autonomous_agent) and debit tokens",
-    dependencies=[Depends(rate_limit(action="text"))],
+    dependencies=[
+        Depends(get_current_user_from_init_data),
+        Depends(rate_limit(action="text")),
+    ],
 )
 async def generate_text(
     body: TextGenerationRequest,
@@ -879,7 +888,10 @@ async def generate_text(
 @router.post(
     "/text/stream",
     summary="Stream a text generation response over SSE",
-    dependencies=[Depends(rate_limit(action="text"))],
+    dependencies=[
+        Depends(get_current_user_from_init_data),
+        Depends(rate_limit(action="text")),
+    ],
     responses={200: {"content": {"text/event-stream": {}}}},
 )
 async def generate_text_stream(
@@ -1055,7 +1067,10 @@ class WebSearchResponse(BaseModel):
     "/search",
     response_model=WebSearchResponse,
     summary="Run a web search via the Composio search toolkit (3 tokens)",
-    dependencies=[Depends(rate_limit(action="search"))],
+    dependencies=[
+        Depends(get_current_user_from_init_data),
+        Depends(rate_limit(action="search")),
+    ],
 )
 async def generate_search(
     body: WebSearchRequest,
@@ -1257,7 +1272,10 @@ class VoiceProcessingResponse(BaseModel):
     "/voice",
     response_model=VoiceProcessingResponse,
     summary="Transcribe a voice message (optionally synthesise reply, 5 tokens)",
-    dependencies=[Depends(rate_limit(action="voice"))],
+    dependencies=[
+        Depends(get_current_user_from_init_data),
+        Depends(rate_limit(action="voice")),
+    ],
 )
 async def generate_voice(
     body: VoiceProcessingRequest,
@@ -1451,7 +1469,10 @@ class DocumentAnalysisResponse(BaseModel):
     "/document",
     response_model=DocumentAnalysisResponse,
     summary="Analyse a document (PDF/DOCX/TXT) and debit 20 tokens",
-    dependencies=[Depends(rate_limit(action="document"))],
+    dependencies=[
+        Depends(get_current_user_from_init_data),
+        Depends(rate_limit(action="document")),
+    ],
 )
 async def generate_document(
     body: DocumentAnalysisRequest,
