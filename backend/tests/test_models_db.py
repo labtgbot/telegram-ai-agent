@@ -126,6 +126,80 @@ async def test_token_usage_log_inserts_into_partition(db_session):
 
 
 @pytest.mark.asyncio
+async def test_token_usage_log_future_insert_uses_default_partition(db_session):
+    user = User(telegram_id=999007, referral_code="TEST-DB-007")
+    db_session.add(user)
+    await db_session.flush()
+
+    future_created_at = datetime.now(UTC) + timedelta(days=400)
+    log = TokenUsageLog(
+        user_id=user.id,
+        service_type="text_chat",
+        tokens_consumed=7,
+        created_at=future_created_at,
+        response_status="ok",
+    )
+    db_session.add(log)
+    await db_session.flush()
+    assert log.id is not None
+
+    res = await db_session.execute(
+        text(
+            """
+            SELECT tableoid::regclass::text
+            FROM token_usage_logs
+            WHERE id = :id AND created_at = :created_at
+            """
+        ),
+        {"id": log.id, "created_at": future_created_at},
+    )
+    assert res.scalar_one() == "token_usage_logs_default"
+
+
+@pytest.mark.asyncio
+async def test_token_usage_partition_maintenance_rehomes_default_rows(db_session):
+    from app.services.token_usage_partitions import ensure_token_usage_partitions
+
+    user = User(telegram_id=999008, referral_code="TEST-DB-008")
+    db_session.add(user)
+    await db_session.flush()
+
+    future_created_at = datetime.now(UTC) + timedelta(days=430)
+    log = TokenUsageLog(
+        user_id=user.id,
+        service_type="image_generation",
+        tokens_consumed=9,
+        created_at=future_created_at,
+        response_status="ok",
+    )
+    db_session.add(log)
+    await db_session.flush()
+
+    result = await ensure_token_usage_partitions(
+        db_session,
+        reference_date=future_created_at,
+        months_ahead=0,
+    )
+
+    expected_partition = f"token_usage_logs_{future_created_at.strftime('%Y_%m')}"
+    assert result.default_created is False
+    assert result.partitions_created == (expected_partition,)
+    assert result.rows_moved == 1
+
+    res = await db_session.execute(
+        text(
+            """
+            SELECT tableoid::regclass::text
+            FROM token_usage_logs
+            WHERE id = :id AND created_at = :created_at
+            """
+        ),
+        {"id": log.id, "created_at": future_created_at},
+    )
+    assert res.scalar_one() == expected_partition
+
+
+@pytest.mark.asyncio
 async def test_partitioning_partition_by_clause(db_session):
     res = await db_session.execute(
         text(
