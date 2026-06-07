@@ -105,9 +105,22 @@ def test_assert_production_safe_blocks_empty_jwt_secret() -> None:
     settings = config_module.Settings(
         app_env="staging",
         admin_jwt_secret="",
+        telegram_webhook_secret="webhook-secret",
     )
     with pytest.raises(config_module.InsecureDefaultSecretError):
         settings.assert_production_safe()
+
+
+def test_assert_production_safe_blocks_empty_webhook_secret() -> None:
+    config_module = _fresh_config_module()
+    settings = config_module.Settings(
+        app_env="production",
+        admin_jwt_secret="a-real-long-random-secret-9f8e",
+        telegram_webhook_secret="",
+    )
+    with pytest.raises(config_module.InsecureDefaultSecretError) as excinfo:
+        settings.assert_production_safe()
+    assert "TELEGRAM_WEBHOOK_SECRET" in str(excinfo.value)
 
 
 def test_assert_production_safe_allows_dev_with_default_secret() -> None:
@@ -123,4 +136,5 @@ def test_assert_production_safe_allows_custom_secret_in_production() -> None:
     config_module.Settings(
         app_env="production",
         admin_jwt_secret="a-real-long-random-secret-9f8e",
+        telegram_webhook_secret="webhook-secret",
     ).assert_production_safe()
