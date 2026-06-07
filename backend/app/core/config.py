@@ -345,6 +345,8 @@ class Settings(BaseSettings):
         offenders: list[str] = []
         if (self.admin_jwt_secret or "").strip() in {"", DEFAULT_ADMIN_JWT_SECRET}:
             offenders.append("ADMIN_JWT_SECRET")
+        if not (self.telegram_webhook_secret or "").strip():
+            offenders.append("TELEGRAM_WEBHOOK_SECRET")
         if offenders:
             raise InsecureDefaultSecretError(
                 "Refusing to start with placeholder secret(s) in "
