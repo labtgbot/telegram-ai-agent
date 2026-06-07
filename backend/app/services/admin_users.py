@@ -514,6 +514,17 @@ CSV_COLUMNS: tuple[str, ...] = (
     "last_active_at",
 )
 
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def _neutralise_csv_cell(value: str) -> str:
+    if not value:
+        return value
+    first = value[0]
+    if first in _CSV_FORMULA_PREFIXES or ord(first) < 32 or ord(first) == 127:
+        return f"'{value}"
+    return value
+
 
 def _csv_row(user: User) -> list[str]:
     def _fmt(value: Any) -> str:
@@ -523,6 +534,8 @@ def _csv_row(user: User) -> list[str]:
             return "true" if value else "false"
         if isinstance(value, datetime):
             return value.astimezone(UTC).isoformat() if value.tzinfo else value.isoformat()
+        if isinstance(value, str):
+            return _neutralise_csv_cell(value)
         return str(value)
 
     return [_fmt(getattr(user, column)) for column in CSV_COLUMNS]
