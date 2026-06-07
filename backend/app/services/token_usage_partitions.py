@@ -167,7 +167,9 @@ async def _create_monthly_partition(
     upper_sql = _timestamp_literal(upper)
 
     await session.execute(
-        text(f"LOCK TABLE {TOKEN_USAGE_DEFAULT_PARTITION} IN ACCESS EXCLUSIVE MODE")
+        _sql(f"""
+            LOCK TABLE {TOKEN_USAGE_DEFAULT_PARTITION} IN ACCESS EXCLUSIVE MODE
+            """)
     )
     rows_to_move = await _count_default_rows_in_range(session, lower_sql, upper_sql)
 
