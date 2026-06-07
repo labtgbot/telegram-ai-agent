@@ -301,6 +301,35 @@ async def test_telegram_verify_rejects_missing_header(build_app) -> None:
 
 
 @pytest.mark.asyncio
+async def test_telegram_verify_rejects_query_init_data(build_app) -> None:
+    app, _ = build_app
+    init = _build_init_data(telegram_id=4242)
+    async with await _client(app) as c:
+        resp = await c.post(
+            "/api/v1/auth/telegram/verify",
+            params={"initData": init},
+        )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "init_data_query_unsupported"
+
+
+@pytest.mark.asyncio
+async def test_telegram_verify_rejects_query_init_data_even_with_header(
+    build_app,
+) -> None:
+    app, _ = build_app
+    init = _build_init_data(telegram_id=4242)
+    async with await _client(app) as c:
+        resp = await c.post(
+            "/api/v1/auth/telegram/verify",
+            params={"initData": init},
+            headers={"X-Telegram-Init-Data": init},
+        )
+    assert resp.status_code == 401
+    assert resp.json()["detail"] == "init_data_query_unsupported"
+
+
+@pytest.mark.asyncio
 async def test_admin_login_round_trip_returns_tokens(build_app) -> None:
     app, _ = build_app
     async with await _client(app) as c:

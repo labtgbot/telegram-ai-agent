@@ -111,12 +111,14 @@ async def get_current_user_from_init_data(
     session: SessionDep,
     x_telegram_init_data: Annotated[str | None, Header()] = None,
 ) -> User:
-    """Verify ``X-Telegram-Init-Data`` and return the upserted user.
+    """Verify ``X-Telegram-Init-Data`` and return the upserted user."""
+    if "initData" in request.query_params:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="init_data_query_unsupported",
+        )
 
-    Falls back to ``request.query_params["initData"]`` so the same dependency
-    works for endpoints used by mini-apps that pass the value in the URL.
-    """
-    raw = x_telegram_init_data or request.query_params.get("initData")
+    raw = x_telegram_init_data
     if not raw:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

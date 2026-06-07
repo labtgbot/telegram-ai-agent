@@ -123,7 +123,7 @@ Response (`200`):
 
 | HTTP | `detail` | Trigger |
 |------|----------|---------|
-| 401  | `invalid_init_data` / `missing_init_data` | Missing/forged init-data header |
+| 401  | `invalid_init_data` / `missing_init_data` / `init_data_query_unsupported` | Missing/forged init-data header, or `initData` sent in the URL query |
 | 403  | `daily_bonus_disabled` | Master switch is off (env or `admin_settings.daily_bonus.enabled = false`) |
 | 404  | `user_not_found` | Authenticated user vanished mid-request |
 | 409  | `{"code": "daily_bonus_already_claimed", "next_available_at": "…"}` | Already claimed today |
@@ -178,7 +178,7 @@ Response (`200`):
 
 | HTTP | `detail` | Trigger |
 |------|----------|---------|
-| 401  | `invalid_init_data` | Missing/forged init-data header |
+| 401  | `invalid_init_data` / `missing_init_data` / `init_data_query_unsupported` | Missing/forged init-data header, or `initData` sent in the URL query |
 | 404  | `package_not_found` | Unknown package code |
 | 422  | Pydantic validation | Blank/oversized `package` |
 | 502  | `telegram_api_error` | `createInvoiceLink` upstream failure |
