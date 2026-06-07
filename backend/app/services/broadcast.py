@@ -88,6 +88,10 @@ CANCELLABLE_STATUSES: frozenset[str] = frozenset(
     {BROADCAST_STATUS_DRAFT, BROADCAST_STATUS_SCHEDULED, BROADCAST_STATUS_IN_PROGRESS}
 )
 
+# A worker updates ``Broadcast.updated_at`` after every recipient.  Another
+# pass may reclaim an ``in_progress`` campaign only after this quiet period.
+BROADCAST_DRAIN_STALE_AFTER = timedelta(minutes=10)
+
 
 # ----------------------------------------------------------------- exceptions
 
@@ -537,8 +541,9 @@ async def list_due_broadcasts(
     now: datetime | None = None,
     limit: int = 25,
 ) -> list[Broadcast]:
-    """Return broadcasts ready to drain: drafts + due-scheduled."""
+    """Return broadcasts ready to drain: drafts, due scheduled, or stale active."""
     now = now or datetime.now(UTC)
+    stale_before = now - BROADCAST_DRAIN_STALE_AFTER
     stmt = (
         select(Broadcast)
         .where(
@@ -549,7 +554,10 @@ async def list_due_broadcasts(
                     Broadcast.scheduled_at.is_not(None),
                     Broadcast.scheduled_at <= now,
                 ),
-                Broadcast.status == BROADCAST_STATUS_IN_PROGRESS,
+                and_(
+                    Broadcast.status == BROADCAST_STATUS_IN_PROGRESS,
+                    Broadcast.updated_at <= stale_before,
+                ),
             )
         )
         .order_by(Broadcast.created_at.asc(), Broadcast.id.asc())
@@ -582,13 +590,43 @@ async def mark_broadcast_started(
     *,
     broadcast: Broadcast,
     now: datetime | None = None,
-) -> None:
+) -> bool:
+    """Atomically claim ``broadcast`` for one drain worker.
+
+    Concurrent workers can select the same due row before either commits.  The
+    conditional ``UPDATE`` makes only one of them own the active drain; a stale
+    ``in_progress`` row can still be reclaimed after the heartbeat window.
+    """
     now = now or datetime.now(UTC)
-    if broadcast.status != BROADCAST_STATUS_IN_PROGRESS:
-        broadcast.status = BROADCAST_STATUS_IN_PROGRESS
-    if broadcast.started_at is None:
-        broadcast.started_at = now
+    stale_before = now - BROADCAST_DRAIN_STALE_AFTER
+    stmt = (
+        update(Broadcast)
+        .where(
+            Broadcast.id == broadcast.id,
+            or_(
+                Broadcast.status == BROADCAST_STATUS_DRAFT,
+                and_(
+                    Broadcast.status == BROADCAST_STATUS_SCHEDULED,
+                    Broadcast.scheduled_at.is_not(None),
+                    Broadcast.scheduled_at <= now,
+                ),
+                and_(
+                    Broadcast.status == BROADCAST_STATUS_IN_PROGRESS,
+                    Broadcast.updated_at <= stale_before,
+                ),
+            ),
+        )
+        .values(
+            status=BROADCAST_STATUS_IN_PROGRESS,
+            started_at=func.coalesce(Broadcast.started_at, now),
+            updated_at=now,
+        )
+        .returning(Broadcast.id)
+    )
+    claimed = (await session.execute(stmt)).scalar_one_or_none() is not None
     await session.flush()
+    await session.refresh(broadcast)
+    return claimed
 
 
 async def mark_broadcast_finished(
@@ -647,6 +685,7 @@ async def record_recipient_result(
     now = now or datetime.now(UTC)
     recipient.attempts = (recipient.attempts or 0) + 1
     recipient.updated_at = now
+    broadcast.updated_at = now
 
     if skipped:
         recipient.status = RECIPIENT_STATUS_SKIPPED
@@ -781,7 +820,10 @@ async def drain_broadcast(
         logger.info("broadcast.drain.cancelled_before_start", broadcast_id=broadcast.id)
         return broadcast
 
-    await mark_broadcast_started(session, broadcast=broadcast, now=now_fn())
+    claimed = await mark_broadcast_started(session, broadcast=broadcast, now=now_fn())
+    if not claimed:
+        logger.info("broadcast.drain.already_claimed", broadcast_id=broadcast.id)
+        return broadcast
     await session.commit()
 
     batches_run = 0
