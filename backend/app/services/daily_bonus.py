@@ -29,7 +29,9 @@ Three layers guard against double-credit:
 3. **Transaction marker** — the bonus row in ``transactions`` carries
    ``payment_id = "daily_bonus:user:{id}:date:{YYYY-MM-DD}"`` plus a
    partial unique index from migration ``0003_payment_idempotency`` to
-   reject duplicates even across concurrent processes.
+   reject duplicates even across concurrent processes. That insert is
+   wrapped in a SAVEPOINT so a duplicate marker also surfaces as
+   :class:`AlreadyClaimedError` without poisoning the caller's session.
 
 CRM configuration
 -----------------
@@ -330,6 +332,7 @@ class DailyBonusService:
             )
 
         token_service = TokenService(self.session, get_default_balance_cache())
+        savepoint = await self.session.begin_nested()
         try:
             credit = await token_service.add(
                 user_id=user_id,
@@ -340,8 +343,16 @@ class DailyBonusService:
                 payment_status="completed",
                 meta={"streak_day": streak_day, "claim_date": today.isoformat()},
             )
+        except IntegrityError:
+            await savepoint.rollback()
+            raise AlreadyClaimedError(
+                next_available_at=_next_midnight_utc(today)
+            ) from None
         except UserNotFoundError:
+            await savepoint.rollback()
             raise
+        else:
+            await savepoint.commit()
 
         claim = DailyBonusClaim(
             user_id=user_id,

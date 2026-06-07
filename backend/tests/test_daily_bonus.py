@@ -15,6 +15,7 @@ Covers four layers:
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -26,7 +27,7 @@ from urllib.parse import urlencode
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 BOT_TOKEN = "1234567890:TEST-AAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 JWT_SECRET = "test-secret"
@@ -98,6 +99,65 @@ def test_coerce_amounts_rejects_zero_and_negative() -> None:
     assert _coerce_amounts("abc") is None
     assert _coerce_amounts(None) is None
     assert _coerce_amounts([]) is None
+
+
+@pytest.mark.asyncio
+async def test_claim_maps_duplicate_payment_marker_to_already_claimed(monkeypatch) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from app.services import daily_bonus as daily_bonus_module
+    from app.services.daily_bonus import AlreadyClaimedError, DailyBonusService
+
+    class _EmptyResult:
+        def all(self):
+            return []
+
+        def first(self):
+            return None
+
+    class _Savepoint:
+        def __init__(self) -> None:
+            self.committed = False
+            self.rolled_back = False
+
+        async def commit(self) -> None:
+            self.committed = True
+
+        async def rollback(self) -> None:
+            self.rolled_back = True
+
+    class _Session:
+        def __init__(self) -> None:
+            self.savepoint = _Savepoint()
+            self.added = []
+
+        async def execute(self, _stmt):
+            return _EmptyResult()
+
+        async def begin_nested(self):
+            return self.savepoint
+
+        def add(self, row) -> None:
+            self.added.append(row)
+
+    class _TokenService:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def add(self, **_kwargs):
+            raise IntegrityError("insert transaction", {}, Exception("duplicate"))
+
+    monkeypatch.setattr(daily_bonus_module, "TokenService", _TokenService)
+
+    session = _Session()
+    service = DailyBonusService(session, redis=None)
+    with pytest.raises(AlreadyClaimedError) as excinfo:
+        await service.claim(42, now=datetime(2026, 5, 16, 9, 0, tzinfo=UTC))
+
+    assert excinfo.value.next_available_at == datetime(2026, 5, 17, tzinfo=UTC)
+    assert session.savepoint.rolled_back is True
+    assert session.savepoint.committed is False
+    assert session.added == []
 
 
 # =========================================================================
@@ -726,3 +786,112 @@ async def test_concurrent_spam_is_idempotent(db_session):
         )
     ).scalars().all()
     assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_claim_duplicate_transaction_marker_is_clean(db_engine, monkeypatch):
+    """A losing concurrent claim must return AlreadyClaimed and leave its session usable."""
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.services.daily_bonus import (
+        AlreadyClaimedError,
+        DailyBonusService,
+        _payment_id,
+    )
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    when = datetime(2026, 5, 16, 9, 0, tzinfo=UTC)
+
+    async with factory() as setup:
+        user = User(
+            telegram_id=9_300_012,
+            username="daily-race",
+            referral_code="DB-RACE-2",
+            token_balance=0,
+        )
+        setup.add(user)
+        await setup.commit()
+        user_id = int(user.id)
+
+    original_read_latest = DailyBonusService._read_latest_from_db
+    read_count = 0
+    read_lock = asyncio.Lock()
+    both_checked_latest = asyncio.Event()
+
+    async def wait_until_both_claims_checked_latest(self, requested_user_id):
+        nonlocal read_count
+        latest = await original_read_latest(self, requested_user_id)
+        if requested_user_id == user_id:
+            async with read_lock:
+                read_count += 1
+                if read_count == 2:
+                    both_checked_latest.set()
+            await asyncio.wait_for(both_checked_latest.wait(), timeout=5)
+        return latest
+
+    monkeypatch.setattr(
+        DailyBonusService,
+        "_read_latest_from_db",
+        wait_until_both_claims_checked_latest,
+    )
+
+    try:
+        async def attempt() -> str:
+            async with factory() as session:
+                service = DailyBonusService(session, redis=None)
+                try:
+                    await service.claim(user_id, now=when)
+                except AlreadyClaimedError:
+                    # The session must not be left in PostgreSQL's aborted
+                    # transaction state after the duplicate payment marker.
+                    usable = (
+                        await session.execute(select(User.id).where(User.id == user_id))
+                    ).scalar_one()
+                    assert usable == user_id
+                    await session.rollback()
+                    return "already"
+
+                await session.commit()
+                return "claimed"
+
+        results = await asyncio.gather(attempt(), attempt())
+        assert sorted(results) == ["already", "claimed"]
+
+        async with factory() as verify:
+            claim_count = (
+                await verify.execute(
+                    select(func.count())
+                    .select_from(DailyBonusClaim)
+                    .where(DailyBonusClaim.user_id == user_id)
+                )
+            ).scalar_one()
+            tx_count = (
+                await verify.execute(
+                    select(func.count())
+                    .select_from(Transaction)
+                    .where(Transaction.payment_id == _payment_id(user_id, when.date()))
+                )
+            ).scalar_one()
+            balance = (
+                await verify.execute(select(User.token_balance).where(User.id == user_id))
+            ).scalar_one()
+
+        assert claim_count == 1
+        assert tx_count == 1
+        assert balance == 10
+    finally:
+        async with factory() as cleanup:
+            await cleanup.execute(
+                DailyBonusClaim.__table__.delete().where(
+                    DailyBonusClaim.user_id == user_id
+                )
+            )
+            await cleanup.execute(
+                Transaction.__table__.delete().where(Transaction.user_id == user_id)
+            )
+            user = (
+                await cleanup.execute(select(User).where(User.id == user_id))
+            ).scalar_one_or_none()
+            if user is not None:
+                await cleanup.delete(user)
+            await cleanup.commit()
