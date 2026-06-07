@@ -351,7 +351,7 @@ async def test_update_maintenance_state_audits(build_app) -> None:
     assert body["message"] == "Back at 18:00 UTC"
     audit = build_app["audit_log"][-1]
     assert audit.action == "settings.maintenance.update"
-    assert audit.ip_address == "1.2.3.4"
+    assert audit.ip_address == "127.0.0.1"
     assert audit.user_agent == "tests/1.0"
     assert build_app["session"].committed is True
 
@@ -514,7 +514,7 @@ async def test_update_admin_role_audits(build_app) -> None:
     audit = build_app["audit_log"][-1]
     assert audit.action == "admin.role.update"
     assert audit.target_user_id == 2
-    assert audit.ip_address == "9.8.7.6"
+    assert audit.ip_address == "127.0.0.1"
 
 
 @pytest.mark.asyncio

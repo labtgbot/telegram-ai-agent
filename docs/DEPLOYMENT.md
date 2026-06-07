@@ -210,6 +210,7 @@ Required in production:
 | `TELEGRAM_MINI_APP_URL` | Yes | Public Mini App URL, normally `https://bot.example.com/`. |
 | `ADMIN_JWT_SECRET` | Yes | Long random string for admin JWT signing. |
 | `ADMIN_SUPER_TELEGRAM_IDS` | Yes for admin access | Comma-separated Telegram user IDs that become `super_admin`. |
+| `TRUSTED_PROXY_IPS` | Recommended behind a reverse proxy | Comma-separated IP/CIDR allowlist for Caddy/Ingress/LB peers whose `X-Forwarded-For` headers may be used. Empty ignores XFF and records the direct peer. |
 | `PAYMENT_PROVIDER_TOKEN` | Required when payments need a provider token | Telegram provider token, if not using Stars-only flow. |
 | `PAYMENT_CURRENCY` | Yes | Defaults to `XTR` for Telegram Stars. |
 

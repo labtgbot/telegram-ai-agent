@@ -613,7 +613,7 @@ async def test_ban_user_sets_flags_and_audits(build_app) -> None:
     assert state["users"][10].is_banned is True
     log = state["audit_log"][-1]
     assert log.action == "user.ban"
-    assert log.ip_address == "203.0.113.5"
+    assert log.ip_address == "127.0.0.1"
     assert log.user_agent == "tests/1.0"
 
 

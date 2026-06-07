@@ -638,7 +638,7 @@ async def test_export_csv_returns_attachment_and_audits(build_app) -> None:
         "group_by": "day",
         "rows": 2,
     }
-    assert audit.ip_address == "198.51.100.7"
+    assert audit.ip_address == "127.0.0.1"
     assert audit.user_agent == "tests/1.0"
 
 

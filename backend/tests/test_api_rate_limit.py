@@ -230,3 +230,35 @@ async def test_authenticated_generate_request_uses_user_plan(
     assert limiter.calls == [
         _ConsumedCall(plan=PLAN_PREMIUM, identifier=str(user.telegram_id), action="text")
     ]
+
+
+@pytest.mark.asyncio
+async def test_anonymous_rate_limit_ignores_untrusted_x_forwarded_for() -> None:
+    limiter = _RecordingLimiter()
+
+    async def fake_get_rate_limiter():
+        return limiter
+
+    app = FastAPI()
+    app.dependency_overrides[real_get_session] = _yield_session
+    app.dependency_overrides[rate_limit_module.get_rate_limiter] = fake_get_rate_limiter
+
+    @app.get(
+        "/limited",
+        dependencies=[Depends(rate_limit_module.rate_limit(action="text"))],
+    )
+    async def limited() -> dict[str, bool]:
+        return {"ok": True}
+
+    async with await _client(app) as client:
+        for spoofed_ip in ("198.51.100.10", "203.0.113.20"):
+            resp = await client.get(
+                "/limited",
+                headers={"X-Forwarded-For": spoofed_ip},
+            )
+            assert resp.status_code == 200
+
+    assert [call.identifier for call in limiter.calls] == [
+        "ip:127.0.0.1",
+        "ip:127.0.0.1",
+    ]

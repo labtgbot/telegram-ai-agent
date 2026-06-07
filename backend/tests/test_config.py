@@ -22,6 +22,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.api_v1_prefix == "/api/v1"
     assert s.redis_url.startswith("redis://")
     assert s.database_url.startswith("postgresql+asyncpg://")
+    assert s.trusted_proxy_ips == ""
     assert s.is_development is True
 
 
@@ -29,6 +30,7 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("LOG_LEVEL", "WARNING")
     monkeypatch.setenv("REDIS_URL", "redis://example:6380/2")
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "10.0.0.0/24, 2001:db8::/32")
 
     from app.core import config as config_module
 
@@ -39,6 +41,7 @@ def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.app_env == "production"
     assert s.log_level == "WARNING"
     assert s.redis_url == "redis://example:6380/2"
+    assert s.trusted_proxy_ips == "10.0.0.0/24, 2001:db8::/32"
     assert s.is_development is False
 
 

@@ -64,6 +64,7 @@ make seed       # python -m scripts.seed
 | `REDIS_URL` | URL Redis-кэша. |
 | `API_V1_PREFIX` | Префикс v1 API (по умолчанию `/api/v1`). |
 | `HEALTH_CHECK_TIMEOUT` | Per-dep таймаут (сек) для `/health`. |
+| `TRUSTED_PROXY_IPS` | Comma-separated IP/CIDR allowlist of reverse proxies whose `X-Forwarded-For` headers are trusted. Empty means XFF is ignored. |
 
 ## Структурированное логирование
 
