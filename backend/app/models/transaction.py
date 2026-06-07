@@ -13,7 +13,9 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    desc,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -62,7 +64,14 @@ class Transaction(Base):
         ),
         Index("ix_transactions_user_id", "user_id"),
         Index("ix_transactions_type", "transaction_type"),
-        Index("ix_transactions_created", "created_at", postgresql_using="btree"),
+        Index("ix_transactions_created", desc("created_at")),
+        Index(
+            "uq_transactions_payment_id",
+            "payment_id",
+            unique=True,
+            postgresql_where=text("payment_id IS NOT NULL"),
+        ),
+        Index("ix_transactions_payment_status", "payment_status"),
     )
 
     def __repr__(self) -> str:
