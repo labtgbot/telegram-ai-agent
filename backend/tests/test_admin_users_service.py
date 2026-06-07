@@ -54,12 +54,14 @@ async def _make_user(
     referred_by: int | None = None,
     token_balance: int = 0,
     first_name: str | None = None,
+    last_name: str | None = None,
 ) -> User:
     tid = _next_telegram_id()
     user = User(
         telegram_id=tid,
         username=username,
         first_name=first_name,
+        last_name=last_name,
         referral_code=f"AU-{tid}",
         role=role,
         is_premium=is_premium,
@@ -370,3 +372,24 @@ async def test_export_users_csv_writes_header_and_rows(db_session):
     assert u2.id in exported_ids
     # excludes the non-banned user
     assert u1.id not in exported_ids
+
+
+@pytest.mark.asyncio
+async def test_export_users_csv_neutralises_formula_cells(db_session):
+    user = await _make_user(
+        db_session,
+        username="+SUM(1,1)",
+        first_name="=1+1",
+        last_name="\t=2+2",
+        is_banned=True,
+    )
+
+    csv_text = await export_users_csv(
+        db_session, filters=UserListFilters(is_banned=True), limit=10
+    )
+
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    row = next(row for row in rows if int(row["id"]) == user.id)
+    assert row["username"] == "'+SUM(1,1)"
+    assert row["first_name"] == "'=1+1"
+    assert row["last_name"] == "'\t=2+2"
