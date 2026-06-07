@@ -17,13 +17,16 @@ class _FakeRequest:
         self.id = request_id
         self.user_id = user_id
         self.status = "pending"
+        self.failed_at = None
+        self.failure_reason = None
         self.scheduled_for = datetime(2026, 5, 1, tzinfo=UTC)
 
 
 class _FakeSession:
     def __init__(self) -> None:
-        self.committed = False
-        self.rolled_back = False
+        self.commit_count = 0
+        self.rollback_count = 0
+        self.needs_rollback = False
 
     async def __aenter__(self):
         return self
@@ -32,10 +35,21 @@ class _FakeSession:
         return None
 
     async def commit(self) -> None:
-        self.committed = True
+        if self.needs_rollback:
+            raise RuntimeError("transaction requires rollback")
+        self.commit_count += 1
 
     async def rollback(self) -> None:
-        self.rolled_back = True
+        self.rollback_count += 1
+        self.needs_rollback = False
+
+    @property
+    def committed(self) -> bool:
+        return self.commit_count > 0
+
+    @property
+    def rolled_back(self) -> bool:
+        return self.rollback_count > 0
 
 
 def _install_session(monkeypatch) -> _FakeSession:
@@ -97,15 +111,23 @@ async def test_records_per_row_failures_without_aborting(monkeypatch) -> None:
 
     async def fake_anonymise(session_arg, *, user_id, now=None):
         if user_id == 11:
+            session_arg.needs_rollback = True
             raise RuntimeError("simulated db error")
         return True
 
     async def fake_mark(session_arg, *, request, now=None):
         request.status = "completed"
 
+    async def fake_mark_failed(session_arg, *, request_id, failure_reason, now=None):
+        failed_request = next(request for request in due if request.id == request_id)
+        failed_request.status = "failed"
+        failed_request.failed_at = now
+        failed_request.failure_reason = failure_reason
+
     monkeypatch.setattr(worker_module, "list_due_deletions", fake_list)
     monkeypatch.setattr(worker_module, "anonymise_user", fake_anonymise)
     monkeypatch.setattr(worker_module, "mark_deletion_completed", fake_mark)
+    monkeypatch.setattr(worker_module, "mark_deletion_failed", fake_mark_failed)
 
     result = await worker_module.process_due_deletions()
 
@@ -115,7 +137,57 @@ async def test_records_per_row_failures_without_aborting(monkeypatch) -> None:
     # Per-row failures must mark the row as failed but still commit so
     # successful rows are not lost.
     assert due[1].status == "failed"
+    assert due[1].failure_reason == "RuntimeError: simulated db error"
     assert session.committed is True
+    assert session.commit_count == 2
+    assert session.rollback_count == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_requests_do_not_block_later_runs(monkeypatch) -> None:
+    from app.workers import account_deletion as worker_module
+
+    _install_session(monkeypatch)
+    due = [
+        _FakeRequest(request_id=1, user_id=10),
+        _FakeRequest(request_id=2, user_id=11),
+    ]
+    processed_users: list[int] = []
+
+    async def fake_list(session_arg, *, now=None, limit=100):
+        return [request for request in due if request.status == "pending"]
+
+    async def fake_anonymise(session_arg, *, user_id, now=None):
+        processed_users.append(user_id)
+        if user_id == 11:
+            session_arg.needs_rollback = True
+            raise RuntimeError("simulated db error")
+        return True
+
+    async def fake_mark(session_arg, *, request, now=None):
+        request.status = "completed"
+
+    async def fake_mark_failed(session_arg, *, request_id, failure_reason, now=None):
+        failed_request = next(request for request in due if request.id == request_id)
+        failed_request.status = "failed"
+        failed_request.failed_at = now
+        failed_request.failure_reason = failure_reason
+
+    monkeypatch.setattr(worker_module, "list_due_deletions", fake_list)
+    monkeypatch.setattr(worker_module, "anonymise_user", fake_anonymise)
+    monkeypatch.setattr(worker_module, "mark_deletion_completed", fake_mark)
+    monkeypatch.setattr(worker_module, "mark_deletion_failed", fake_mark_failed)
+
+    first = await worker_module.process_due_deletions()
+    due.append(_FakeRequest(request_id=3, user_id=12))
+    second = await worker_module.process_due_deletions()
+
+    assert first.processed == 2
+    assert first.failed == 1
+    assert due[1].status == "failed"
+    assert second.processed == 1
+    assert second.failed == 0
+    assert processed_users == [10, 11, 12]
 
 
 @pytest.mark.asyncio

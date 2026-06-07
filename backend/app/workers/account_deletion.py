@@ -14,16 +14,20 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.core.database import get_session_factory
 from app.core.logging import get_logger
-from app.models.account_deletion import DELETION_STATUS_FAILED
 from app.services.account_deletion import (
     anonymise_user,
     list_due_deletions,
     mark_deletion_completed,
+    mark_deletion_failed,
 )
 
 logger = get_logger(__name__)
+
+MAX_FAILURE_REASON_LEN = 500
 
 
 @dataclass(frozen=True)
@@ -45,23 +49,34 @@ async def process_due_deletions(
         try:
             due = await list_due_deletions(session, now=now, limit=limit)
             for request in due:
+                request_id = request.id
+                user_id = request.user_id
                 processed += 1
                 try:
                     changed = await anonymise_user(
-                        session, user_id=request.user_id, now=now
+                        session, user_id=user_id, now=now
                     )
                     await mark_deletion_completed(session, request=request, now=now)
+                    await session.commit()
                     if changed:
                         anonymised += 1
-                except Exception:
+                except Exception as exc:
+                    await session.rollback()
                     failed += 1
-                    request.status = DELETION_STATUS_FAILED
+                    failure_reason = _format_failure_reason(exc)
+                    await mark_deletion_failed(
+                        session,
+                        request_id=request_id,
+                        failure_reason=failure_reason,
+                        now=now,
+                    )
+                    await session.commit()
                     logger.exception(
                         "account_deletion.failed",
-                        user_id=request.user_id,
-                        request_id=request.id,
+                        user_id=user_id,
+                        request_id=request_id,
+                        failure_reason=failure_reason,
                     )
-            await session.commit()
         except Exception:
             await session.rollback()
             logger.exception("account_deletion.run_failed")
@@ -73,6 +88,22 @@ async def process_due_deletions(
         failed=failed,
     )
     return DeletionRunResult(processed=processed, anonymised=anonymised, failed=failed)
+
+
+def _format_failure_reason(exc: Exception) -> str:
+    """Return a concise failure reason without serialising SQL statements."""
+    if isinstance(exc, SQLAlchemyError):
+        original = getattr(exc, "orig", None)
+        if original is not None:
+            return f"{type(exc).__name__}: {type(original).__name__}"[
+                :MAX_FAILURE_REASON_LEN
+            ]
+        return type(exc).__name__[:MAX_FAILURE_REASON_LEN]
+
+    message = str(exc).strip().splitlines()[0] if str(exc).strip() else ""
+    if message:
+        return f"{type(exc).__name__}: {message}"[:MAX_FAILURE_REASON_LEN]
+    return type(exc).__name__[:MAX_FAILURE_REASON_LEN]
 
 
 def main() -> int:

@@ -15,6 +15,7 @@ if str(BACKEND_DIR) not in sys.path:
 from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Integer  # noqa: E402
 
 from app.models import (  # noqa: E402
+    AccountDeletionRequest,
     AdminSetting,
     Base,
     DailyAnalytics,
@@ -33,6 +34,7 @@ def test_all_tables_registered():
         "admin_settings",
         "daily_analytics",
         "subscriptions",
+        "account_deletion_requests",
     }
     assert expected.issubset(set(Base.metadata.tables.keys()))
 
@@ -124,3 +126,29 @@ def test_daily_analytics_primary_key_is_date():
 def test_subscription_foreign_keys():
     fks = {fk.column.table.name for fk in Subscription.__table__.foreign_keys}
     assert {"users", "transactions"} <= fks
+
+
+def test_account_deletion_request_columns():
+    table = AccountDeletionRequest.__table__
+    expected_columns = {
+        "id",
+        "user_id",
+        "status",
+        "requested_at",
+        "scheduled_for",
+        "cancelled_at",
+        "completed_at",
+        "failed_at",
+        "requested_via",
+        "reason",
+        "failure_reason",
+    }
+    assert expected_columns == set(table.columns.keys())
+    assert isinstance(table.c.id.type, BigInteger)
+    assert isinstance(table.c.requested_at.type, DateTime)
+    assert table.c.requested_at.type.timezone is True
+    assert isinstance(table.c.failed_at.type, DateTime)
+    assert table.c.failed_at.type.timezone is True
+
+    index_names = {ix.name for ix in table.indexes}
+    assert {"ix_account_deletion_pending", "uq_account_deletion_active"} <= index_names

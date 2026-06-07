@@ -144,6 +144,38 @@ CREATE INDEX ix_daily_bonus_user_date_desc ON daily_bonus_claims(user_id, claim_
 
 One row per successful claim. The `UNIQUE(user_id, claim_date)` constraint is the second layer of the daily-bonus idempotency stack (see `docs/TOKEN_ECONOMY.md > Daily Bonus & Streak`) — racing requests that pass the service-level guard collide here as an `IntegrityError`, which the service converts into `AlreadyClaimedError`. Reading the user's most recent row is enough to recover the active streak, so the service never re-scans the ledger to derive the next reward.
 
+### account_deletion_requests
+```sql
+CREATE TABLE account_deletion_requests (
+    id              BIGSERIAL PRIMARY KEY,
+    user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    status          VARCHAR(32) NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','cancelled','completed','failed')),
+
+    requested_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    scheduled_for   TIMESTAMPTZ NOT NULL,
+    cancelled_at    TIMESTAMPTZ,
+    completed_at    TIMESTAMPTZ,
+    failed_at       TIMESTAMPTZ,
+
+    requested_via   VARCHAR(32),
+    reason          TEXT,
+    failure_reason  TEXT
+);
+
+CREATE INDEX ix_account_deletion_pending
+    ON account_deletion_requests(scheduled_for)
+    WHERE status = 'pending';
+
+CREATE UNIQUE INDEX uq_account_deletion_active
+    ON account_deletion_requests(user_id)
+    WHERE status = 'pending';
+```
+
+The worker processes only `pending` rows. Failed worker attempts are marked
+with `status = 'failed'`, `failed_at`, and `failure_reason`, while the original
+user-supplied `reason` is preserved for audit context.
+
 ### subscriptions
 ```sql
 CREATE TABLE subscriptions (
