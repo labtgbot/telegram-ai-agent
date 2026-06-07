@@ -7,6 +7,8 @@ no PostgreSQL is available (see ``conftest.py``).
 """
 from __future__ import annotations
 
+import csv
+import io
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -362,7 +364,9 @@ async def test_export_users_csv_writes_header_and_rows(db_session):
     lines = csv_text.strip().split("\n")
     header = lines[0]
     assert header.startswith("id,telegram_id,username,")
+    rows = list(csv.DictReader(io.StringIO(csv_text)))
+    exported_ids = {int(row["id"]) for row in rows}
     # contains the banned user
-    assert any(str(u2.id) in line for line in lines[1:])
+    assert u2.id in exported_ids
     # excludes the non-banned user
-    assert not any(str(u1.id) in line for line in lines[1:])
+    assert u1.id not in exported_ids
