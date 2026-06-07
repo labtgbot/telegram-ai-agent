@@ -35,6 +35,7 @@ from sqlalchemy import select
 from app.bot.client import TelegramApiError
 from app.models import Transaction, User
 from app.models.subscription import Subscription
+from app.services.balance_cache import BalanceCache
 from app.services.payment_packages import (
     PACKAGES,
     PRO_PLAN_CODE,
@@ -79,6 +80,40 @@ def _fake_client(invoice_link: str = "https://t.me/$test-link") -> Any:
     client.send_invoice = AsyncMock(return_value={"message_id": 1})
     client.answer_pre_checkout_query = AsyncMock(return_value=True)
     return client
+
+
+class _StubRedis:
+    """Async Redis-shaped stub used for balance cache assertions."""
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+
+    async def get(self, name: str):
+        return self.store.get(name)
+
+    async def set(self, name: str, value, ex=None) -> bool:  # noqa: ANN001
+        self.store[name] = str(value)
+        return True
+
+    async def delete(self, *names: str) -> int:
+        removed = 0
+        for name in names:
+            if name in self.store:
+                del self.store[name]
+                removed += 1
+        return removed
+
+
+class _NoopSession:
+    def __init__(self) -> None:
+        self.flush_calls = 0
+        self.rollback_calls = 0
+
+    async def flush(self) -> None:
+        self.flush_calls += 1
+
+    async def rollback(self) -> None:
+        self.rollback_calls += 1
 
 
 # ----------------------------------------------------------------- parse_payload
@@ -312,6 +347,112 @@ async def test_finalize_credits_tokens_and_upgrades_pending_row(db_session):
         )
     ).scalars().all()
     assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_finalize_pending_purchase_refreshes_cache_without_db(monkeypatch):
+    user = User(
+        id=42,
+        telegram_id=9_000_010_0,
+        username="cache-unit",
+        referral_code="PAY-FZ-CACHE-UNIT",
+        token_balance=10,
+        total_tokens_purchased=0,
+    )
+    payload = f"pkg=basic;u={user.id};n=cache-unit"
+    pending = Transaction(
+        id=99,
+        user_id=user.id,
+        transaction_type="purchase",
+        tokens_amount=PACKAGES["basic"].tokens,
+        stars_amount=PACKAGES["basic"].stars,
+        package_name="basic",
+        payment_id=f"{INVOICE_PREFIX}{payload}",
+        payment_status="pending",
+    )
+    cache = BalanceCache(_StubRedis(), ttl_seconds=60)
+    await cache.set(user.id, user.token_balance)
+
+    class _FakeTokenService:
+        def __init__(self, session, balance_cache=None) -> None:  # noqa: ANN001
+            self.session = session
+            self.balance_cache = balance_cache
+
+        async def _lock_user(self, user_id: int) -> User:
+            assert user_id == user.id
+            return user
+
+        async def _refresh_cache(self, user_id: int, new_balance: int) -> None:
+            await self.balance_cache.set(user_id, new_balance)
+
+        async def add(self, **_kwargs):  # noqa: ANN003
+            raise AssertionError("pending purchases must not create a second row")
+
+    class _UnitPaymentService(PaymentService):
+        async def _find_completed_by_charge_id(self, charge_id: str):
+            assert charge_id == "charge-cache-unit"
+            return None
+
+        async def _find_pending_invoice(self, invoice_payload: str):
+            assert invoice_payload == payload
+            return pending
+
+        async def _maybe_credit_referral_bonus(
+            self,
+            *,
+            referee: User,
+            purchase_transaction_id: int,
+        ) -> None:
+            assert referee is user
+            assert purchase_transaction_id == pending.id
+
+    monkeypatch.setattr("app.services.payments.TokenService", _FakeTokenService)
+    monkeypatch.setattr(
+        "app.services.payments.get_default_balance_cache",
+        lambda: cache,
+    )
+    svc = _UnitPaymentService(_NoopSession(), client=_fake_client())
+
+    result = await svc.finalize_successful_payment(
+        telegram_user_id=user.telegram_id,
+        payload=payload,
+        total_amount=PACKAGES["basic"].stars,
+        currency=DEFAULT_CURRENCY,
+        telegram_payment_charge_id="charge-cache-unit",
+    )
+
+    assert result.new_balance == 10 + PACKAGES["basic"].tokens
+    assert await cache.get(user.id) == result.new_balance
+
+
+@pytest.mark.asyncio
+async def test_finalize_refreshes_cached_balance_after_pending_purchase(
+    db_session, monkeypatch
+):
+    user = await _make_user(
+        db_session, telegram_id=9_000_010_1, code="PAY-FZ-CACHE", balance=10
+    )
+    cache = BalanceCache(_StubRedis(), ttl_seconds=60)
+    await cache.set(user.id, user.token_balance)
+    monkeypatch.setattr(
+        "app.services.payments.get_default_balance_cache",
+        lambda: cache,
+    )
+    svc = PaymentService(db_session, client=_fake_client())
+    invoice = await svc.create_invoice(user_id=user.id, package_code="basic")
+
+    result = await svc.finalize_successful_payment(
+        telegram_user_id=user.telegram_id,
+        payload=invoice.payload,
+        total_amount=invoice.stars_amount,
+        currency=DEFAULT_CURRENCY,
+        telegram_payment_charge_id="charge-cache-refresh-1",
+    )
+
+    await db_session.refresh(user)
+    assert result.new_balance == 10 + PACKAGES["basic"].tokens
+    assert user.token_balance == result.new_balance
+    assert await cache.get(user.id) == user.token_balance
 
 
 @pytest.mark.asyncio
