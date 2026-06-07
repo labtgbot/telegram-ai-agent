@@ -215,6 +215,7 @@ class _SessionRecorder:
     def __init__(self, balance: int | None) -> None:
         self.balance = balance
         self.execute_calls = 0
+        self.info: dict[str, object] = {}
 
     async def execute(self, _stmt):  # noqa: ANN001
         self.execute_calls += 1
@@ -273,15 +274,41 @@ async def test_get_balance_raises_when_user_missing_and_no_cache() -> None:
 
 
 @pytest.mark.asyncio
-async def test_refresh_cache_swallows_redis_outage() -> None:
+async def test_mutation_cache_hook_invalidates_instead_of_writing_uncommitted_balance() -> None:
+    redis = _StubRedis()
+    cache = BalanceCache(redis, ttl_seconds=60)
+    await cache.set(1, 200)
+
+    svc = TokenService(_SessionRecorder(balance=0), cache)  # type: ignore[arg-type]
+    await svc._invalidate_balance_cache(1)
+
+    assert await cache.get(1) is None
+
+
+@pytest.mark.asyncio
+async def test_get_balance_does_not_cache_dirty_session_value() -> None:
+    redis = _StubRedis()
+    cache = BalanceCache(redis, ttl_seconds=60)
+    session = _SessionRecorder(balance=150)
+    svc = TokenService(session, cache)  # type: ignore[arg-type]
+
+    await svc._invalidate_balance_cache(1)
+
+    assert await svc.get_balance(1) == 150
+    assert session.execute_calls == 1
+    assert await cache.get(1) is None
+
+
+@pytest.mark.asyncio
+async def test_mutation_cache_hook_swallows_redis_outage() -> None:
     """A Redis failure must never break a billable spend."""
 
     class _BrokenRedis(_StubRedis):
-        async def set(self, *_a, **_kw) -> bool:
+        async def delete(self, *_a, **_kw) -> int:
             raise RuntimeError("redis down")
 
     cache = BalanceCache(_BrokenRedis(), ttl_seconds=60)
     svc = TokenService(_SessionRecorder(balance=0), cache)  # type: ignore[arg-type]
-    # _refresh_cache is the codepath every write method calls post-flush;
+    # _invalidate_balance_cache is the codepath every write method calls post-flush;
     # it must absorb backend errors silently.
-    await svc._refresh_cache(1, 500)
+    await svc._invalidate_balance_cache(1)

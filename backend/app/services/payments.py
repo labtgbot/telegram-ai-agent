@@ -472,7 +472,7 @@ class PaymentService:
                     is_subscription=is_recurring,
                     already_processed=True,
                 )
-            await token_service._refresh_cache(user.id, int(user.token_balance))
+            await token_service._invalidate_balance_cache(user.id)
             tx = pending
         else:
             # No pending row (subscription renewal, or pending was

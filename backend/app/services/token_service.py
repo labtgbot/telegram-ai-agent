@@ -88,6 +88,7 @@ class TransactionNotRefundableError(TokenServiceError):
 
 CREDIT_TYPES: frozenset[str] = frozenset({"bonus", "purchase", "manual_bonus"})
 REFUNDABLE_TYPES: frozenset[str] = frozenset({"spend", "purchase"})
+_DIRTY_BALANCE_CACHE_USERS_KEY = "token_service.dirty_balance_cache_user_ids"
 
 
 @dataclass(frozen=True)
@@ -136,9 +137,9 @@ class TokenService:
     transaction.  All write methods take ``SELECT ... FOR UPDATE`` row
     locks so concurrent calls are serialised on the user row.
 
-    Pass a :class:`BalanceCache` to enable the Redis write-through layer
+    Pass a :class:`BalanceCache` to enable the Redis read-through layer
     (issue #36): :meth:`get_balance` will hit Redis first and the write
-    methods will refresh / invalidate the cached value as they mutate
+    methods will invalidate the cached value as they mutate
     ``users.token_balance``.  When ``balance_cache`` is omitted the
     service falls back to the pre-cache behaviour, which keeps tests
     that build a service with only a session working unchanged.
@@ -153,6 +154,16 @@ class TokenService:
         self._balance_cache = balance_cache
 
     # ------------------------------------------------------------- internal
+
+    def _mark_balance_cache_dirty(self, user_id: int) -> None:
+        dirty_user_ids = self.session.info.setdefault(
+            _DIRTY_BALANCE_CACHE_USERS_KEY, set()
+        )
+        dirty_user_ids.add(int(user_id))
+
+    def _is_balance_cache_dirty(self, user_id: int) -> bool:
+        dirty_user_ids = self.session.info.get(_DIRTY_BALANCE_CACHE_USERS_KEY)
+        return isinstance(dirty_user_ids, set) and int(user_id) in dirty_user_ids
 
     async def _lock_user(self, user_id: int) -> User:
         """Take a row-level lock on the user and return the ORM object.
@@ -175,11 +186,13 @@ class TokenService:
 
         Reads go through the optional :class:`BalanceCache` first; on a
         miss we fetch from the DB and write the value back so the next
-        request can serve from Redis. The cache is invalidated by every
-        mutating method on this service, so a hit is always consistent
-        with the last committed write.
+        request can serve from Redis. After this session mutates a
+        user's balance, reads for that user bypass Redis and do not
+        hydrate it, so uncommitted in-transaction values are never
+        published by this service.
         """
-        if self._balance_cache is not None:
+        cache_dirty = self._is_balance_cache_dirty(user_id)
+        if self._balance_cache is not None and not cache_dirty:
             cached = await self._balance_cache.get(user_id)
             if cached is not None:
                 return cached
@@ -190,7 +203,7 @@ class TokenService:
         if balance is None:
             raise UserNotFoundError(f"user {user_id} not found")
         balance_int = int(balance)
-        if self._balance_cache is not None:
+        if self._balance_cache is not None and not cache_dirty:
             await self._balance_cache.set(user_id, balance_int)
         return balance_int
 
@@ -234,27 +247,30 @@ class TokenService:
         if (await self.session.execute(stmt)).scalar_one_or_none() is None:
             raise UserNotFoundError(f"user {user_id} not found")
 
-    async def _refresh_cache(self, user_id: int, new_balance: int) -> None:
-        """Push the post-mutation balance into Redis, write-through.
+    async def _invalidate_balance_cache(self, user_id: int) -> None:
+        """Drop cached balance after an in-transaction mutation.
 
-        Mutations always flush inside the caller's transaction — we
-        write to the cache *before* commit on purpose: the cache is a
-        read-aside accelerator, not a source of truth, and writing
-        early lets the next read in the same request hit Redis. If the
-        outer transaction is rolled back the next mutation (or the TTL)
-        will reconcile the drift, and :class:`BalanceCache` failures
-        are swallowed so a Redis outage cannot break a billable spend.
+        Write methods flush but do not commit, so Redis must not receive
+        the new balance here: an outer rollback would leave an
+        uncommitted value cached until TTL. Deleting the key keeps the
+        cache read-through only; the next balance read hydrates Redis
+        from the committed DB value.
         """
+        self._mark_balance_cache_dirty(user_id)
         if self._balance_cache is None:
             return
         try:
-            await self._balance_cache.set(user_id, int(new_balance))
+            await self._balance_cache.invalidate(user_id)
         except Exception as exc:  # noqa: BLE001 — caching is best-effort
             logger.warning(
-                "balance_cache.set_failed",
+                "balance_cache.invalidate_failed",
                 user_id=user_id,
                 error=str(exc),
             )
+
+    async def _refresh_cache(self, user_id: int, new_balance: int) -> None:
+        """Backward-compatible private hook; now invalidates instead of writing."""
+        await self._invalidate_balance_cache(user_id)
 
     # ----------------------------------------------------------------- add
 
@@ -314,7 +330,7 @@ class TokenService:
         self.session.add(tx)
         await self.session.flush()
 
-        await self._refresh_cache(user.id, int(user.token_balance))
+        await self._invalidate_balance_cache(user.id)
 
         logger.info(
             "tokens.add",
@@ -391,7 +407,7 @@ class TokenService:
         self.session.add(usage)
         await self.session.flush()
 
-        await self._refresh_cache(user.id, int(user.token_balance))
+        await self._invalidate_balance_cache(user.id)
 
         logger.info(
             "tokens.spend",
@@ -528,7 +544,7 @@ class TokenService:
         self.session.add(tx)
         await self.session.flush()
 
-        await self._refresh_cache(user.id, int(user.token_balance))
+        await self._invalidate_balance_cache(user.id)
 
         logger.info(
             "tokens.refund",

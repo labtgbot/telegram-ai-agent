@@ -2,17 +2,17 @@
 
 ``GET /api/v1/user/balance`` and the rate-limit middleware both read the
 balance on every authenticated request, so the row easily dominates the
-DB read budget. Caching it in Redis with a write-through pattern brings
-the hot path off PostgreSQL while keeping correctness guarantees:
+DB read budget. Caching it in Redis with read-through hydration and
+explicit invalidation brings the hot path off PostgreSQL while keeping
+correctness guarantees:
 
 * on read miss we hydrate the cache from ``users.token_balance``;
 * on every token mutation (``TokenService.add`` / ``spend`` / ``refund``
   / ``manual_bonus``) we explicitly :func:`invalidate` the key — the
   cache is read-only relative to the DB ledger, so an empty cache always
   forces a fresh read;
-* :func:`set_balance` is exposed for code paths that already know the
-  new balance (e.g. just-committed transactions) and want to skip the
-  next read entirely.
+* :meth:`BalanceCache.set` is kept for read-miss hydration and code paths
+  that already know a committed balance.
 
 The keyspace lives at ``balance:user:{user_id}`` to match the
 ``rl:`` / ``daily_bonus:`` conventions used elsewhere in the codebase.
@@ -20,7 +20,7 @@ TTL comes from :attr:`Settings.balance_cache_ttl_seconds` and acts as a
 safety net — explicit invalidation is the primary correctness mechanism.
 
 Issue #36 acceptance criteria: *кэширование баланса в Redis
-(write-through + invalidation)*.
+(read-through + invalidation)*.
 """
 from __future__ import annotations
 
@@ -53,10 +53,11 @@ def cache_key(user_id: int) -> str:
 
 
 class BalanceCache:
-    """Thin wrapper around Redis providing write-through balance caching.
+    """Thin wrapper around Redis providing read-through balance caching.
 
     The class is intentionally tiny — all the real work (deciding when
-    to refresh, plumbing the DB read) belongs in :class:`TokenService`.
+    to hydrate or invalidate, plumbing the DB read) belongs in
+    :class:`TokenService`.
     Keeping the cache focused makes it trivial to mock in tests and to
     swap the backend (e.g. Dragonfly, KeyDB) without touching callers.
     """
