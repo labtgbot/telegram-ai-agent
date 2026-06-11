@@ -14,6 +14,13 @@ interface RequestCodeResponse {
   code: string | null;
 }
 
+function postLoginTarget(from: string | null): string {
+  if (!from || !from.startsWith("/") || from.startsWith("//") || from.includes("\\")) {
+    return "/dashboard";
+  }
+  return from;
+}
+
 export function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
@@ -83,9 +90,7 @@ export function LoginForm() {
       if (!response.ok) {
         throw new Error(payload.detail ?? `Verification failed (${response.status}).`);
       }
-      const from = params.get("from");
-      const target = from && from.startsWith("/") ? from : "/dashboard";
-      router.replace(target);
+      router.replace(postLoginTarget(params.get("from")));
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error.");
@@ -142,7 +147,8 @@ export function LoginForm() {
           )}
           {delivery?.delivery === "bot" && (
             <p className="text-sm text-slate-500 dark:text-slate-400">
-              We sent a one-time code to your Telegram. It expires in {Math.max(60, delivery.ttl_seconds)} seconds.
+              We sent a one-time code to your Telegram. It expires in{" "}
+              {Math.max(60, delivery.ttl_seconds)} seconds.
             </p>
           )}
           <label className="block space-y-1 text-sm">
