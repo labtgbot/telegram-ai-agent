@@ -47,6 +47,8 @@ const _en = {
     refresh: "Refresh",
     refreshing: "Refreshing…",
     refreshError: "Could not refresh profile.",
+    refreshAuthError: "Telegram session expired. Reopen the Mini App and try again.",
+    refreshNotFound: "Profile is not available yet.",
   },
   settings: {
     title: "Settings",
@@ -74,6 +76,8 @@ const _en = {
     dataExportSubmit: "Request export",
     dataExportSuccess: "Export requested. Check your email shortly.",
     dataExportError: "Could not request the export. Please try again later.",
+    dataExportAuthError: "Telegram session expired. Reopen the Mini App and try again.",
+    dataExportUnavailable: "Data export is not available for this account yet.",
     deleteAccount: "Delete account",
     deleteAccountBody:
       "Permanently delete your account and all associated data. This action cannot be undone.",
@@ -84,6 +88,8 @@ const _en = {
     deleteAccountConfirmInput: "DELETE",
     deleteAccountSuccess: "Account scheduled for deletion.",
     deleteAccountError: "Could not delete the account. Please try again later.",
+    deleteAccountAuthError: "Telegram session expired. Reopen the Mini App and try again.",
+    deleteAccountUnavailable: "Account deletion is not available for this account yet.",
   },
   history: {
     title: "History",

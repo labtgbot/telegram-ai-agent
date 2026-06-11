@@ -3,6 +3,7 @@ import "server-only";
 import { readAccessToken, readRefreshToken, persistTokens, clearTokens } from "@/lib/auth/cookies";
 import { ApiClient } from "@/lib/api/client";
 import { ApiError } from "@/lib/api/errors";
+import { parseTokenPair } from "@/lib/auth/token-pair";
 import { serverEnv } from "@/lib/env";
 
 /**
@@ -27,13 +28,14 @@ export function createServerApiClient(): ApiClient {
           await clearTokens();
           return undefined;
         }
-        const payload = (await response.json()) as {
-          access_token: string;
-          refresh_token: string;
-          expires_in: number;
-        };
-        await persistTokens(payload);
-        return payload.access_token;
+        const payload = await response.json().catch(() => ({}));
+        const tokenPair = parseTokenPair(payload);
+        if (!tokenPair) {
+          await clearTokens();
+          return undefined;
+        }
+        await persistTokens(tokenPair);
+        return tokenPair.access_token;
       } catch {
         await clearTokens();
         return undefined;

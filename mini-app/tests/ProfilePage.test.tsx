@@ -22,8 +22,16 @@ vi.mock("@/services/userApi", () => ({
   },
 }));
 
+vi.mock("@/lib/sentry", () => ({
+  Sentry: {
+    captureException: vi.fn(),
+  },
+}));
+
 import { userApi } from "@/services/userApi";
+import { Sentry } from "@/lib/sentry";
 const getProfileMock = vi.mocked(userApi.getProfile);
+const captureExceptionMock = vi.mocked(Sentry.captureException);
 
 function seedUser(overrides: Partial<User> = {}): void {
   useUserStore.getState().setUser({
@@ -49,6 +57,7 @@ describe("ProfilePage", () => {
   beforeEach(() => {
     useUserStore.getState().reset();
     useSettingsStore.getState().reset();
+    captureExceptionMock.mockReset();
     getProfileMock.mockReset();
     getProfileMock.mockResolvedValue({
       id: 11,
@@ -118,5 +127,50 @@ describe("ProfilePage", () => {
     );
     expect(screen.getByTestId("row-premium")).toHaveTextContent("Inactive");
     await waitFor(() => expect(getProfileMock).toHaveBeenCalled());
+  });
+
+  it("shows an auth-specific profile refresh error for 401/403", async () => {
+    const { ApiError } = await import("@/services/userApi");
+    seedUser();
+    getProfileMock.mockRejectedValue(new ApiError("Unauthorized", 401, { detail: "bad auth" }));
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/session expired/i);
+    expect(captureExceptionMock).not.toHaveBeenCalled();
+  });
+
+  it("shows a missing-profile message for 404 without reporting to Sentry", async () => {
+    const { ApiError } = await import("@/services/userApi");
+    seedUser();
+    getProfileMock.mockRejectedValue(new ApiError("Missing", 404, { detail: "not found" }));
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/profile is not available/i);
+    expect(captureExceptionMock).not.toHaveBeenCalled();
+  });
+
+  it("reports unexpected profile refresh errors to Sentry", async () => {
+    const failure = new Error("boom");
+    seedUser();
+    getProfileMock.mockRejectedValue(failure);
+
+    render(
+      <MemoryRouter>
+        <ProfilePage />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not refresh/i);
+    expect(captureExceptionMock).toHaveBeenCalledWith(failure);
   });
 });

@@ -23,10 +23,18 @@ vi.mock("@/services/userApi", () => ({
   },
 }));
 
+vi.mock("@/lib/sentry", () => ({
+  Sentry: {
+    captureException: vi.fn(),
+  },
+}));
+
 import { userApi } from "@/services/userApi";
+import { Sentry } from "@/lib/sentry";
 
 const requestExportMock = vi.mocked(userApi.requestDataExport);
 const deleteAccountMock = vi.mocked(userApi.deleteAccount);
+const captureExceptionMock = vi.mocked(Sentry.captureException);
 
 beforeEach(() => {
   window.localStorage.clear();
@@ -35,6 +43,7 @@ beforeEach(() => {
   useThemeStore.setState({ scheme: "light", themeParams: {} });
   requestExportMock.mockReset();
   deleteAccountMock.mockReset();
+  captureExceptionMock.mockReset();
 });
 
 describe("SettingsPage", () => {
@@ -101,6 +110,34 @@ describe("SettingsPage", () => {
     );
   });
 
+  it("shows an auth-specific message when export is unauthorized", async () => {
+    const { ApiError } = await import("@/services/userApi");
+    requestExportMock.mockRejectedValue(new ApiError("Unauthorized", 401, { detail: "bad auth" }));
+
+    render(<SettingsPage />);
+    await userEvent.type(screen.getByLabelText("Email"), "me@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Request export" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("export-status")).toHaveTextContent(/session expired/i),
+    );
+    expect(captureExceptionMock).not.toHaveBeenCalled();
+  });
+
+  it("reports unexpected export failures to Sentry", async () => {
+    const failure = new Error("network down");
+    requestExportMock.mockRejectedValue(failure);
+
+    render(<SettingsPage />);
+    await userEvent.type(screen.getByLabelText("Email"), "me@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Request export" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("export-status")).toHaveTextContent(/could not request/i),
+    );
+    expect(captureExceptionMock).toHaveBeenCalledWith(failure);
+  });
+
   it("opens the delete-account confirm dialog and requires the typed token", async () => {
     deleteAccountMock.mockResolvedValue({
       request_id: 7,
@@ -131,5 +168,21 @@ describe("SettingsPage", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(deleteAccountMock).not.toHaveBeenCalled();
+  });
+
+  it("shows an auth-specific message when account deletion is forbidden", async () => {
+    const { ApiError } = await import("@/services/userApi");
+    deleteAccountMock.mockRejectedValue(new ApiError("Forbidden", 403, { detail: "forbidden" }));
+
+    render(<SettingsPage />);
+    await userEvent.click(screen.getByRole("button", { name: "Delete my account" }));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.type(within(dialog).getByPlaceholderText("DELETE"), "DELETE");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete my account" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("delete-status")).toHaveTextContent(/session expired/i),
+    );
+    expect(captureExceptionMock).not.toHaveBeenCalled();
   });
 });

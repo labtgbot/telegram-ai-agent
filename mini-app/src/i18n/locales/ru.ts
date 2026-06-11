@@ -48,6 +48,8 @@ export const ru: TranslationDict = {
     refresh: "Обновить",
     refreshing: "Обновляем…",
     refreshError: "Не удалось обновить профиль.",
+    refreshAuthError: "Сессия Telegram истекла. Откройте Mini App заново и попробуйте ещё раз.",
+    refreshNotFound: "Профиль пока недоступен.",
   },
   settings: {
     title: "Настройки",
@@ -75,6 +77,8 @@ export const ru: TranslationDict = {
     dataExportSubmit: "Запросить экспорт",
     dataExportSuccess: "Запрос отправлен. Проверьте почту.",
     dataExportError: "Не удалось запросить экспорт. Попробуйте позже.",
+    dataExportAuthError: "Сессия Telegram истекла. Откройте Mini App заново и попробуйте ещё раз.",
+    dataExportUnavailable: "Экспорт данных пока недоступен для этого аккаунта.",
     deleteAccount: "Удалить аккаунт",
     deleteAccountBody: "Удалить аккаунт и все связанные данные без возможности восстановления.",
     deleteAccountCta: "Удалить мой аккаунт",
@@ -84,6 +88,9 @@ export const ru: TranslationDict = {
     deleteAccountConfirmInput: "DELETE",
     deleteAccountSuccess: "Аккаунт поставлен в очередь на удаление.",
     deleteAccountError: "Не удалось удалить аккаунт. Попробуйте позже.",
+    deleteAccountAuthError:
+      "Сессия Telegram истекла. Откройте Mini App заново и попробуйте ещё раз.",
+    deleteAccountUnavailable: "Удаление пока недоступно для этого аккаунта.",
   },
   history: {
     title: "История",

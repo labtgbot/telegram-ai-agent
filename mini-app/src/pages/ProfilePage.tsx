@@ -4,7 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import { Avatar } from "@/components/Avatar";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
+import type { TranslationKey } from "@/i18n";
 import { useTranslation } from "@/i18n/useTranslation";
+import { Sentry } from "@/lib/sentry";
 import { ApiError, userApi } from "@/services/userApi";
 import { useUserStore } from "@/store/useUserStore";
 
@@ -25,6 +27,19 @@ function formatDate(value: string | null | undefined, language: string): string 
   }).format(parsed);
 }
 
+function profileRefreshError(err: unknown, t: (key: TranslationKey) => string): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401 || err.status === 403) {
+      return t("profile.refreshAuthError");
+    }
+    if (err.status === 404) {
+      return t("profile.refreshNotFound");
+    }
+  }
+  Sentry.captureException(err);
+  return t("profile.refreshError");
+}
+
 export function ProfilePage(): ReactElement {
   const user = useUserStore((s) => s.user);
   const setUser = useUserStore((s) => s.setUser);
@@ -39,11 +54,7 @@ export function ProfilePage(): ReactElement {
       const fresh = await userApi.getProfile();
       setUser(fresh);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
-        setError(null);
-      } else {
-        setError(t("profile.refreshError"));
-      }
+      setError(profileRefreshError(err, t));
     } finally {
       setIsRefreshing(false);
     }
