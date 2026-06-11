@@ -9,7 +9,7 @@ import secrets
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.rbac import Role
@@ -118,3 +118,29 @@ async def upsert_telegram_user(
 async def record_admin_login(session: AsyncSession, user: User) -> None:
     user.last_login_at = datetime.now(UTC)
     await session.flush()
+
+
+async def mark_totp_timecode_used(
+    session: AsyncSession,
+    user: User,
+    timecode: int,
+) -> bool:
+    """Persist a newly accepted TOTP timestep if it is strictly newer."""
+    if user.last_totp_timecode is not None and timecode <= user.last_totp_timecode:
+        return False
+
+    result = await session.execute(
+        update(User)
+        .where(User.id == user.id)
+        .where(
+            or_(
+                User.last_totp_timecode.is_(None),
+                User.last_totp_timecode < timecode,
+            )
+        )
+        .values(last_totp_timecode=timecode)
+    )
+    if getattr(result, "rowcount", 0) != 1:
+        return False
+    user.last_totp_timecode = timecode
+    return True

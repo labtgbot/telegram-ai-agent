@@ -69,9 +69,21 @@ class FakeUser:
         self.is_banned = is_banned
         self.totp_enabled = totp_enabled
         self.totp_secret = totp_secret
+        self.last_totp_timecode = None
         self.is_premium = False
         self.last_active_at = None
         self.last_login_at = None
+
+
+class FakeSession:
+    def __init__(self) -> None:
+        self.commits = 0
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+    async def flush(self) -> None:
+        return None
 
 
 class FakeRedis:
@@ -165,6 +177,7 @@ def build_app(monkeypatch, fake_settings, fake_redis, fake_rate_limiter, stub_us
     from app.services import users as users_module
 
     user_store: dict[int, FakeUser] = {stub_user.telegram_id: stub_user}
+    fake_session = FakeSession()
 
     async def fake_find_by_id(session, user_id):  # type: ignore[no-untyped-def]
         for u in user_store.values():
@@ -192,8 +205,14 @@ def build_app(monkeypatch, fake_settings, fake_redis, fake_rate_limiter, stub_us
     async def fake_record_login(session, user):  # type: ignore[no-untyped-def]
         user.last_login_at = time.time()
 
+    async def fake_mark_totp_timecode_used(session, user, timecode):  # type: ignore[no-untyped-def]
+        if user.last_totp_timecode is not None and timecode <= user.last_totp_timecode:
+            return False
+        user.last_totp_timecode = timecode
+        return True
+
     async def fake_get_session():  # type: ignore[no-untyped-def]
-        yield None
+        yield fake_session
 
     monkeypatch.setattr(users_module, "find_user_by_id", fake_find_by_id)
     monkeypatch.setattr(
@@ -201,9 +220,15 @@ def build_app(monkeypatch, fake_settings, fake_redis, fake_rate_limiter, stub_us
     )
     monkeypatch.setattr(users_module, "upsert_telegram_user", fake_upsert)
     monkeypatch.setattr(users_module, "record_admin_login", fake_record_login)
+    monkeypatch.setattr(
+        users_module, "mark_totp_timecode_used", fake_mark_totp_timecode_used
+    )
     # The auth router imports symbols directly — patch them at the call site.
     monkeypatch.setattr(auth_module, "find_user_by_telegram_id", fake_find_by_telegram_id)
     monkeypatch.setattr(auth_module, "record_admin_login", fake_record_login)
+    monkeypatch.setattr(
+        auth_module, "mark_totp_timecode_used", fake_mark_totp_timecode_used
+    )
     monkeypatch.setattr(deps, "upsert_telegram_user", fake_upsert)
     monkeypatch.setattr(deps, "find_user_by_id", fake_find_by_id)
     monkeypatch.setattr(deps, "get_session", fake_get_session)
@@ -227,13 +252,10 @@ def build_app(monkeypatch, fake_settings, fake_redis, fake_rate_limiter, stub_us
     from app.auth.dependencies import _settings_dep
     from app.core.database import get_session as real_get_session
 
-    async def _yield_none():
-        yield None
-
     async def _fake_get_rate_limiter():
         return fake_rate_limiter
 
-    app.dependency_overrides[real_get_session] = _yield_none
+    app.dependency_overrides[real_get_session] = fake_get_session
     app.dependency_overrides[_settings_dep] = lambda: fake_settings
     app.dependency_overrides[get_rate_limiter] = _fake_get_rate_limiter
     from app.api.v1.auth import _redis_dep
@@ -441,16 +463,25 @@ async def test_admin_login_rate_limit_breach_returns_429(
 
 
 @pytest.mark.asyncio
-async def test_admin_login_request_rejects_non_admin(build_app) -> None:
+async def test_admin_login_request_returns_generic_response_for_non_admin(build_app) -> None:
     app, store = build_app
     store[99] = FakeUser(id=99, telegram_id=99, role="user")
     async with await _client(app) as c:
+        admin_req = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
         req = await c.post(
             "/api/v1/auth/admin/login/request",
             json={"telegram_id": 99},
         )
-    assert req.status_code == 403
-    assert req.json()["detail"] == "not_an_admin"
+
+    assert admin_req.status_code == 200, admin_req.text
+    assert req.status_code == 200, req.text
+    assert req.json()["delivery"] == admin_req.json()["delivery"] == "response"
+    assert req.json()["ttl_seconds"] == admin_req.json()["ttl_seconds"] == 60
+    assert req.json()["code"].isdigit()
+    assert len(req.json()["code"]) == 6
 
 
 @pytest.mark.asyncio
@@ -507,6 +538,49 @@ async def test_admin_login_requires_totp_when_enabled(build_app) -> None:
             json={"telegram_id": 42, "code": code2, "totp_code": totp_code},
         )
         assert ok.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_login_rejects_reused_totp_timecode(build_app) -> None:
+    app, store = build_app
+    import pyotp
+
+    user = store[42]
+    user.totp_enabled = True
+    user.totp_secret = pyotp.random_base32()
+
+    async with await _client(app) as c:
+        req = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
+        totp_code = pyotp.TOTP(user.totp_secret).now()
+        ok = await c.post(
+            "/api/v1/auth/admin/login/verify",
+            json={
+                "telegram_id": 42,
+                "code": req.json()["code"],
+                "totp_code": totp_code,
+            },
+        )
+        assert ok.status_code == 200, ok.text
+        assert user.last_totp_timecode is not None
+
+        req2 = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
+        replay = await c.post(
+            "/api/v1/auth/admin/login/verify",
+            json={
+                "telegram_id": 42,
+                "code": req2.json()["code"],
+                "totp_code": totp_code,
+            },
+        )
+
+    assert replay.status_code == 401
+    assert replay.json()["detail"] == "totp_invalid"
 
 
 @pytest.mark.asyncio

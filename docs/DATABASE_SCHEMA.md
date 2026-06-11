@@ -30,12 +30,19 @@ CREATE TABLE users (
 
     is_banned               BOOLEAN NOT NULL DEFAULT FALSE,
     ban_reason              TEXT,
-    banned_until            TIMESTAMPTZ
+    banned_until            TIMESTAMPTZ,
+
+    role                    VARCHAR(32) NOT NULL DEFAULT 'user',
+    totp_secret             VARCHAR(64),
+    totp_enabled            BOOLEAN NOT NULL DEFAULT FALSE,
+    last_totp_timecode      BIGINT,
+    last_login_at           TIMESTAMPTZ
 );
 
 CREATE INDEX idx_users_telegram_id ON users(telegram_id);
 CREATE INDEX idx_users_premium     ON users(is_premium) WHERE is_premium = TRUE;
 CREATE INDEX idx_users_referral    ON users(referral_code);
+CREATE INDEX idx_users_role        ON users(role) WHERE role <> 'user';
 ```
 
 ### transactions

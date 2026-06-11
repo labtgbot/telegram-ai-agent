@@ -72,6 +72,7 @@ def test_user_columns_and_constraints():
         "role",
         "totp_secret",
         "totp_enabled",
+        "last_totp_timecode",
         "last_login_at",
     }
     assert expected_columns == set(table.columns.keys())

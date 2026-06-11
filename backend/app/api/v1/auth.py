@@ -32,7 +32,7 @@ from app.auth.jwt import (
     decode_token,
 )
 from app.auth.rbac import Role, role_satisfies
-from app.auth.totp import verify_totp
+from app.auth.totp import verify_totp_timecode
 from app.core.client_ip import resolve_client_ip
 from app.core.logging import get_logger
 from app.core.redis import get_redis
@@ -41,6 +41,7 @@ from app.services.admin_login import (
     LoginCodeAttemptsExceededError,
     LoginCodeInvalidError,
     LoginCodeMissingError,
+    generate_numeric_login_code,
     request_admin_login,
     verify_admin_login,
 )
@@ -52,6 +53,7 @@ from app.services.rate_limit_config import (
 from app.services.rate_limiter import RateLimitedError
 from app.services.users import (
     find_user_by_telegram_id,
+    mark_totp_timecode_used,
     record_admin_login,
 )
 
@@ -156,21 +158,41 @@ async def telegram_verify(
 
 # ------------------------------------------------------------- /admin/login/...
 
-async def _require_admin_candidate(
-    session: AsyncSession, telegram_id: int
-) -> User:
+async def _find_admin_candidate(session: AsyncSession, telegram_id: int) -> User | None:
     user = await find_user_by_telegram_id(session, telegram_id)
     if user is None or user.is_banned:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="not_an_admin",
-        )
+        return None
     if not role_satisfies(Role.coerce(user.role), Role.ANALYST):
+        return None
+    return user
+
+
+async def _require_admin_candidate(session: AsyncSession, telegram_id: int) -> User:
+    user = await _find_admin_candidate(session, telegram_id)
+    if user is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="not_an_admin",
         )
     return user
+
+
+def _admin_login_exposes_code(settings: Any) -> bool:
+    return bool(settings.app_debug or settings.is_development)
+
+
+def _admin_login_request_response(
+    settings: Any,
+    *,
+    ttl_seconds: int,
+    code: str | None,
+) -> AdminLoginRequestResponse:
+    expose_code = _admin_login_exposes_code(settings)
+    return AdminLoginRequestResponse(
+        delivery="response" if expose_code else "bot",
+        ttl_seconds=ttl_seconds,
+        code=code if expose_code else None,
+    )
 
 
 def _admin_login_rate_limit_identifiers(request: Request, telegram_id: int) -> tuple[str, str]:
@@ -239,7 +261,19 @@ async def admin_login_request(
         telegram_id=payload.telegram_id,
         action=ACTION_ADMIN_LOGIN_REQUEST,
     )
-    user = await _require_admin_candidate(session, payload.telegram_id)
+    user = await _find_admin_candidate(session, payload.telegram_id)
+    if user is None:
+        logger.info(
+            "auth.admin.login.requested",
+            telegram_id=payload.telegram_id,
+            accepted=False,
+        )
+        return _admin_login_request_response(
+            settings,
+            ttl_seconds=settings.admin_login_code_ttl,
+            code=generate_numeric_login_code(settings.admin_login_code_length),
+        )
+
     login = await request_admin_login(
         redis,
         telegram_id=user.telegram_id,
@@ -251,12 +285,12 @@ async def admin_login_request(
         "auth.admin.login.requested",
         telegram_id=user.telegram_id,
         ttl=login.ttl_seconds,
+        accepted=True,
     )
-    expose_code = settings.app_debug or settings.is_development
-    return AdminLoginRequestResponse(
-        delivery="response" if expose_code else "bot",
+    return _admin_login_request_response(
+        settings,
         ttl_seconds=login.ttl_seconds,
-        code=login.code if expose_code else None,
+        code=login.code,
     )
 
 
@@ -313,13 +347,20 @@ async def admin_login_verify(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="totp_required",
             )
-        if not verify_totp(user.totp_secret, payload.totp_code):
+        timecode = verify_totp_timecode(user.totp_secret, payload.totp_code)
+        if timecode is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="totp_invalid",
+            )
+        if not await mark_totp_timecode_used(session, user, timecode):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="totp_invalid",
             )
 
     await record_admin_login(session, user)
+    await session.commit()
 
     return _mint_token_pair(user, settings)
 
