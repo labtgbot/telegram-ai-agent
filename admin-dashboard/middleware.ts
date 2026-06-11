@@ -60,10 +60,7 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
       url.searchParams.set("reason", "forbidden");
       return NextResponse.redirect(url);
     }
-    const response = NextResponse.next();
-    response.headers.set("x-admin-role", payload.role);
-    response.headers.set("x-admin-sub", payload.sub);
-    return response;
+    return NextResponse.next();
   } catch (err) {
     if (err instanceof TokenExpiredError) {
       return redirectToLogin(request, "expired");
