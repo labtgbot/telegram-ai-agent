@@ -12,45 +12,88 @@ title = "Telegram AI Agent gitleaks config"
 # Pull the maintained ruleset published by the gitleaks project.
 useDefault = true
 
-[allowlist]
-description = "Repository-wide allow-list (paths, regexes, commits)"
+[[allowlists]]
+description = "Generated lockfiles and local-only fixture files"
 
 paths = [
     # Lockfiles: cargo / npm hashes look like high-entropy strings but are
     # public integrity checksums.
     '''(^|/)package-lock\.json$''',
     '''(^|/)pnpm-lock\.yaml$''',
-    # Documentation: examples and pasted curl snippets routinely include
-    # placeholder bearer tokens. We rely on code review for these.
-    '''(^|/)docs/.*\.md$''',
-    '''(^|/).+\.md$''',
     # Local-dev compose stack contains throw-away postgres/redis creds.
     '''(^|/)docker/compose\.yml$''',
-    # Backend test fixtures: hard-coded tokens for HMAC unit tests.
-    '''(^|/)backend/tests/.*$''',
-    # Frontend test fixtures.
-    '''(^|/)mini-app/.*__fixtures__/.*$''',
-    '''(^|/)admin-dashboard/.*__fixtures__/.*$''',
     # Mock Composio recordings.
     '''(^|/)backend/app/services/composio/mocks/.*$''',
 ]
 
+[[allowlists]]
+description = "Known sentinel placeholders, scoped to documented lines"
+condition = "AND"
+regexTarget = "line"
+paths = [
+    '''(^|/)backend/app/core/config\.py$''',
+    '''(^|/)backend/tests/test_config\.py$''',
+    '''(^|/)admin-dashboard/lib/env\.ts$''',
+    '''(^|/)admin-dashboard/scripts/dev-token\.mjs$''',
+    '''(^|/)admin-dashboard/tests/unit/env\.test\.ts$''',
+    '''(^|/)admin-dashboard/tests/unit/middleware-auth\.test\.ts$''',
+    '''(^|/)docs/SECURITY\.md$''',
+    '''(^|/)docs/DEPLOYMENT\.md$''',
+    '''(^|/)docs/security/audit-report\.md$''',
+    '''(^|/)docs/security/owasp-top10\.md$''',
+    '''(^|/)docs/audit/README\.md$''',
+    '''(^|/)docs/audit/findings/01-admin-jwt-default-secret\.md$''',
+    '''(^|/)docs/audit/findings/29-secret-scan-gaps\.md$''',
+    '''(^|/)experiments/audit_issue_gen\.py$''',
+    '''(^|/)experiments/created_issues\.md$''',
+    '''(^|/)experiments/issues_manifest\.json$''',
+]
 regexes = [
-    # Sentinel placeholders documented in audit-report.md F-001 — they
-    # exist as defaults that the bootstrap-check rejects.
-    '''change-me''',
-    '''CHANGEME''',
-    # Telegram bot-token shape used in CI smoke tests
-    # (see backend.yml::TELEGRAM_BOT_TOKEN).
-    '''1234567890:LOAD-SMOKE-[A-Z]{22}''',
-    # Placeholder issuer used by pyotp tests.
-    '''otpauth://totp/Test:.*''',
+    '''(?i)(ADMIN_JWT_SECRET|DEFAULT_ADMIN_JWT_SECRET|DEFAULT_APP_SECRET|jwtSecret|admin_jwt_secret)[^\n]*change-me''',
+    '''(?i)change-me[^\n]*(ADMIN_JWT_SECRET|JWT|placeholder|fallback|sentinel|default)''',
+    '''(?i)(placeholder|fallback|sentinel|default)[^\n]*change-me''',
 ]
 
-stopwords = [
-    "example",
-    "sample",
-    "placeholder",
-    "fixture",
-    "dummy",
+[[allowlists]]
+description = "Telegram bot-token-shaped test placeholders"
+condition = "AND"
+regexTarget = "line"
+paths = [
+    '''(^|/)\.github/workflows/backend\.yml$''',
+    '''(^|/)backend/tests/test_api_rate_limit\.py$''',
+    '''(^|/)backend/tests/test_auth_endpoints\.py$''',
+    '''(^|/)backend/tests/test_auth_telegram\.py$''',
+    '''(^|/)backend/tests/test_compliance_endpoints\.py$''',
+    '''(^|/)backend/tests/test_daily_bonus\.py$''',
+    '''(^|/)backend/tests/test_log_scrubbing\.py$''',
+    '''(^|/)backend/tests/test_payment_endpoints\.py$''',
+    '''(^|/)backend/tests/test_referrals\.py$''',
+    '''(^|/)backend/tests/test_user_endpoints\.py$''',
+    '''(^|/)backend/tests/test_user_gdpr_endpoints\.py$''',
+]
+regexes = [
+    '''1234567890:(LOAD-SMOKE-[A-Z]{22}|TEST-[A-Z]{29}|AAEhBP0av28-abcdefghijklmnopqrstuvwxyz)''',
+]
+
+[[allowlists]]
+description = "Deliberate fake secrets used by log-scrubbing tests"
+condition = "AND"
+regexTarget = "line"
+paths = [
+    '''(^|/)backend/tests/test_log_scrubbing\.py$''',
+]
+regexes = [
+    '''"api_key": "sk-xxxx"''',
+    '''jwt = "eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiIxMjM0NSJ9\.dBjftJeZ4CVPmB92K27uhbUJU1p1r-aaaaaa"''',
+]
+
+[[allowlists]]
+description = "JWT helper unit tests use a local SECRET constant"
+condition = "AND"
+regexTarget = "line"
+paths = [
+    '''(^|/)backend/tests/test_auth_jwt\.py$''',
+]
+regexes = [
+    '''secret=SECRET''',
 ]

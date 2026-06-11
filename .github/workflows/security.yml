@@ -96,15 +96,11 @@ jobs:
 
       - name: Run npm audit
         working-directory: ${{ matrix.workspace }}
-        # `--audit-level=critical` makes the job fail only on Critical
-        # CVEs. High/Medium/Low findings remain visible in the uploaded
-        # JSON artifact and are tracked manually in
-        # `docs/security/audit-report.md` (see F-006 for the open Next.js
-        # advisories scheduled for Phase 4.x). Raising the gate back to
-        # `high` blocks the next release once the upgrade lands.
+        # Keep the merge gate strict for runtime advisories while still
+        # uploading the full JSON report for lower-severity findings.
         run: |
           set -o pipefail
-          npm audit --omit=dev --audit-level=critical \
+          npm audit --omit=dev --audit-level=high \
             --json | tee ../npm-audit-${{ matrix.workspace }}.json
 
       - name: Upload npm audit report
