@@ -13,6 +13,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO_ROOT / "docker" / "compose.prod.yml"
 CADDY_FILE = REPO_ROOT / "docker" / "Caddyfile.prod"
+MONITORING_COMPOSE_FILE = REPO_ROOT / "deploy" / "monitoring" / "docker-compose.monitoring.yml"
+MONITORING_DOCS_FILE = REPO_ROOT / "docs" / "MONITORING.md"
 
 COMPOSE_ENV_KEYS = {
     "ACME_EMAIL",
@@ -22,6 +24,8 @@ COMPOSE_ENV_KEYS = {
     "CADDY_CONFIG_DIR",
     "CADDY_DATA_DIR",
     "DOMAIN",
+    "GF_SECURITY_ADMIN_PASSWORD",
+    "GF_SECURITY_ADMIN_USER",
     "MINI_APP_IMAGE",
     "POSTGRES_PASSWORD",
     "REDIS_PASSWORD",
@@ -82,6 +86,39 @@ def _run_compose_config(
             "compose",
             "-f",
             str(docker_dir / "compose.prod.yml"),
+            "--env-file",
+            str(env_file),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=project,
+        env=_clean_env(),
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_monitoring_compose_config(
+    tmp_path: Path, env_values: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    project = tmp_path / "project"
+    monitoring_dir = project / "deploy" / "monitoring"
+    monitoring_dir.mkdir(parents=True)
+    shutil.copy2(MONITORING_COMPOSE_FILE, monitoring_dir / "docker-compose.monitoring.yml")
+
+    env_file = project / ".env.monitoring"
+    env_file.write_text(
+        "".join(f"{key}={value}\n" for key, value in env_values.items()),
+        encoding="utf-8",
+    )
+
+    return subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(monitoring_dir / "docker-compose.monitoring.yml"),
             "--env-file",
             str(env_file),
             "config",
@@ -167,3 +204,55 @@ def test_prod_compose_hardening_contract(tmp_path: Path) -> None:
     assert "/tmp/caddy run" in "\n".join(caddy["command"])
     assert "/tmp/caddy" in " ".join(caddy["healthcheck"]["test"])
     assert any(mount.startswith("/tmp:") and "exec" in mount for mount in caddy["tmpfs"])
+
+
+def test_monitoring_compose_requires_grafana_admin_password(tmp_path: Path) -> None:
+    _require_docker_compose()
+
+    result = _run_monitoring_compose_config(tmp_path, {})
+
+    assert result.returncode != 0
+    assert "GF_SECURITY_ADMIN_PASSWORD" in result.stderr
+
+
+def test_monitoring_compose_hardening_contract(tmp_path: Path) -> None:
+    _require_docker_compose()
+
+    result = _run_monitoring_compose_config(
+        tmp_path,
+        {"GF_SECURITY_ADMIN_PASSWORD": "grafana-local-password"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    config = json.loads(result.stdout)
+    services = config["services"]
+
+    assert services["grafana"]["environment"]["GF_SECURITY_ADMIN_USER"] == "admin"
+    assert services["grafana"]["environment"]["GF_SECURITY_ADMIN_PASSWORD"] == (
+        "grafana-local-password"
+    )
+
+    expected_ports = {
+        "alertmanager": 9093,
+        "grafana": 3000,
+        "loki": 3100,
+        "prometheus": 9090,
+    }
+    for service_name, target_port in expected_ports.items():
+        ports = services[service_name]["ports"]
+        assert ports == [
+            {
+                "host_ip": "127.0.0.1",
+                "mode": "ingress",
+                "protocol": "tcp",
+                "published": str(target_port),
+                "target": target_port,
+            }
+        ]
+
+
+def test_monitoring_docs_warn_against_public_exposure() -> None:
+    docs = MONITORING_DOCS_FILE.read_text(encoding="utf-8")
+
+    assert "GF_SECURITY_ADMIN_PASSWORD" in docs
+    assert "must not be exposed publicly" in docs

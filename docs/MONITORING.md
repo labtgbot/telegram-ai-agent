@@ -42,12 +42,18 @@ alerts and the SLI/SLO contract the on-call rotation defends.
 ## Running the stack locally
 
 ```bash
+export GF_SECURITY_ADMIN_PASSWORD="$(openssl rand -base64 24)"
 docker compose -f deploy/monitoring/docker-compose.monitoring.yml up -d
-# Grafana    → http://localhost:3000  (admin / admin)
+# Grafana    → http://localhost:3000  (admin / $GF_SECURITY_ADMIN_PASSWORD)
 # Prometheus → http://localhost:9090
 # Alertmgr   → http://localhost:9093
 # Loki       → http://localhost:3100
 ```
+
+The compose stack publishes Prometheus, Alertmanager, Grafana and Loki on
+`127.0.0.1` only. It is intended for local access or SSH-tunneled operations
+and must not be exposed publicly without an authenticated TLS reverse proxy;
+Prometheus, Alertmanager and Loki do not have an auth layer in this stack.
 
 Start the backend with `METRICS_ENABLED=true` (default) and, optionally,
 `SENTRY_DSN=…` to verify error reporting.
