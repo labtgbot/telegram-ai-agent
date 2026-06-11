@@ -81,6 +81,9 @@ class VideoJob(Base):
     refund_transaction_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("transactions.id"), nullable=True
     )
+    # Intentionally FK-less: token_usage_logs has composite PK (id, created_at)
+    # because it is range-partitioned by created_at; this scalar keeps a compact
+    # audit pointer without reshaping video job rows around the partition key.
     usage_log_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")

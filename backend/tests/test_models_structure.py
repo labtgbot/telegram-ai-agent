@@ -88,9 +88,10 @@ def test_user_columns_and_constraints():
 
 def test_user_indexes_present():
     index_names = {ix.name for ix in User.__table__.indexes}
-    assert "ix_users_telegram_id" in index_names
     assert "ix_users_premium" in index_names
-    assert "ix_users_referral" in index_names
+    assert "ix_users_role" in index_names
+    assert "ix_users_telegram_id" not in index_names
+    assert "ix_users_referral" not in index_names
 
     premium_index = next(ix for ix in User.__table__.indexes if ix.name == "ix_users_premium")
     where_clause = premium_index.dialect_options["postgresql"].get("where")

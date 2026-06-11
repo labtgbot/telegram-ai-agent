@@ -78,13 +78,11 @@ class User(Base):
     )
 
     __table_args__ = (
-        Index("ix_users_telegram_id", "telegram_id"),
         Index(
             "ix_users_premium",
             "is_premium",
             postgresql_where="is_premium = TRUE",
         ),
-        Index("ix_users_referral", "referral_code"),
         Index(
             "ix_users_role",
             "role",

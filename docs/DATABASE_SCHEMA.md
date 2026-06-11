@@ -39,11 +39,13 @@ CREATE TABLE users (
     last_login_at           TIMESTAMPTZ
 );
 
-CREATE INDEX idx_users_telegram_id ON users(telegram_id);
 CREATE INDEX idx_users_premium     ON users(is_premium) WHERE is_premium = TRUE;
-CREATE INDEX idx_users_referral    ON users(referral_code);
 CREATE INDEX idx_users_role        ON users(role) WHERE role <> 'user';
 ```
+
+`users.telegram_id` and `users.referral_code` rely on their `UNIQUE`
+constraints for lookup indexes; separate non-unique B-tree indexes would
+duplicate the same keys and add write amplification.
 
 ### transactions
 ```sql
@@ -75,7 +77,7 @@ CREATE INDEX idx_tx_created ON transactions(created_at DESC);
 ### token_usage_logs
 ```sql
 CREATE TABLE token_usage_logs (
-    id                  BIGSERIAL PRIMARY KEY,
+    id                  BIGSERIAL,
     user_id             BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     service_type        VARCHAR(100) NOT NULL,
     tokens_consumed     INTEGER NOT NULL,
@@ -87,13 +89,21 @@ CREATE TABLE token_usage_logs (
     composio_tool       VARCHAR(255),
     mcp_server          VARCHAR(255),
 
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY (id, created_at)
 ) PARTITION BY RANGE (created_at);
 
 CREATE INDEX idx_usage_user_id ON token_usage_logs(user_id);
 CREATE INDEX idx_usage_service ON token_usage_logs(service_type);
 CREATE INDEX idx_usage_created ON token_usage_logs(created_at DESC);
 ```
+
+`token_usage_logs` uses the composite primary key `(id, created_at)` because
+PostgreSQL requires the partition key in unique constraints on partitioned
+tables. Scalar `usage_log_id` fields in audit-adjacent tables such as
+`chat_messages` and `video_jobs` are therefore intentionally FK-less audit
+pointers; a real FK would need both `usage_log_id` and `usage_log_created_at`.
 
 ### admin_settings
 ```sql
