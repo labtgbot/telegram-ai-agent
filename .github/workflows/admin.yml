@@ -29,7 +29,7 @@ jobs:
     name: Lint, typecheck, build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Detect package.json
         id: detect
@@ -44,7 +44,7 @@ jobs:
 
       - name: Set up Node ${{ env.NODE_VERSION }}
         if: steps.detect.outputs.ready == 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -73,7 +73,7 @@ jobs:
 
       - name: Upload build artifact
         if: steps.detect.outputs.ready == 'true' && hashFiles('admin-dashboard/.next/**', 'admin-dashboard/dist/**', 'admin-dashboard/build/**') != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: admin-dashboard-build
           path: |

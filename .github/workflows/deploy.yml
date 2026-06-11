@@ -33,10 +33,10 @@ jobs:
     name: Helm lint + template
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Set up Helm
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5
         with:
           version: v3.16.1
 
@@ -128,17 +128,35 @@ jobs:
           fi
           echo "::notice title=Helm::backup render: $cron_count CronJobs, $(wc -l < /tmp/backup.yaml) lines"
 
+      - name: Install kubeconform
+        env:
+          KUBECONFORM_VERSION: v0.8.0
+          KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl --fail --silent --show-error --location \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            --output "$RUNNER_TEMP/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  $RUNNER_TEMP/kubeconform-linux-amd64.tar.gz" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/kubeconform-linux-amd64.tar.gz" -C "$RUNNER_TEMP/bin" kubeconform
+          chmod 0755 "$RUNNER_TEMP/bin/kubeconform"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          kubeconform -v
+
       - name: Validate Kubernetes manifests against schemas
-        uses: instrumenta/kubeval-action@master
-        continue-on-error: true
-        with:
-          files: /tmp/staging.yaml,/tmp/prod.yaml,/tmp/backup.yaml
+        run: |
+          kubeconform \
+            -strict \
+            -summary \
+            /tmp/staging.yaml \
+            /tmp/prod.yaml \
+            /tmp/backup.yaml
 
   backup-scripts-test:
     name: Backup scripts — shellcheck + unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Install shellcheck
         run: sudo apt-get update && sudo apt-get install -y shellcheck
@@ -157,7 +175,7 @@ jobs:
     name: docker compose.prod.yml — parse
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: docker compose config
         env:
@@ -180,7 +198,7 @@ jobs:
     name: docker compose.backup.yml — parse
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
       - name: Validate compose.backup.yml structure
         run: |
