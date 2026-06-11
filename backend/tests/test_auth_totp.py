@@ -8,6 +8,7 @@ from app.auth.totp import (
     generate_totp_secret,
     provisioning_uri,
     verify_totp,
+    verify_totp_timecode,
 )
 
 
@@ -54,6 +55,17 @@ def test_verify_tolerates_one_period_skew() -> None:
     assert verify_totp(secret, code, now=base - DEFAULT_INTERVAL + 1) is True
     # Two periods away — rejected.
     assert verify_totp(secret, code, now=base + DEFAULT_INTERVAL * 3) is False
+
+
+def test_verify_timecode_returns_accepted_step() -> None:
+    secret = generate_totp_secret()
+    totp = pyotp.TOTP(secret)
+    base = 1_700_000_000
+    timecode = base // DEFAULT_INTERVAL
+    code = totp.at(base)
+
+    assert verify_totp_timecode(secret, code, now=base) == timecode
+    assert verify_totp_timecode(secret, "abcdef", now=base) is None
 
 
 def test_provisioning_uri_contains_issuer_and_account() -> None:

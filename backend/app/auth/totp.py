@@ -5,7 +5,8 @@ of one period to tolerate clock skew).
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import hmac
+import time
 from typing import Final
 
 import pyotp
@@ -32,16 +33,36 @@ def verify_totp(
     ``valid_window`` allows codes that are one period stale in either
     direction (default ±30s).
     """
-    if not secret or not code:
-        return False
+    if now is None:
+        return verify_totp_timecode(secret, code, valid_window=valid_window) is not None
+    return verify_totp_timecode(secret, code, valid_window=valid_window, now=now) is not None
+
+
+def verify_totp_timecode(
+    secret: str,
+    code: str,
+    *,
+    valid_window: int = DEFAULT_VALID_WINDOW,
+    now: float | None = None,
+) -> int | None:
+    """Return the accepted TOTP timestep, or ``None`` when invalid."""
+    if not secret or not code or valid_window < 0:
+        return None
     candidate = code.strip()
     if not candidate.isdigit():
-        return False
+        return None
+
+    timestamp = time.time() if now is None else now
+    current_timecode = int(timestamp // DEFAULT_INTERVAL)
     totp = pyotp.TOTP(secret, interval=DEFAULT_INTERVAL, digits=DEFAULT_DIGITS)
-    if now is None:
-        return totp.verify(candidate, valid_window=valid_window)
-    for_time = datetime.fromtimestamp(now, tz=UTC)
-    return totp.verify(candidate, valid_window=valid_window, for_time=for_time)
+    for offset in range(-valid_window, valid_window + 1):
+        timecode = current_timecode + offset
+        if timecode < 0:
+            continue
+        expected = totp.at(timecode * DEFAULT_INTERVAL)
+        if hmac.compare_digest(expected, candidate):
+            return timecode
+    return None
 
 
 def provisioning_uri(

@@ -67,12 +67,16 @@ class _AsyncRedisLike(Protocol):
     async def expire(self, key: Any, seconds: Any) -> Any: ...
 
 
-def _generate_numeric_code(length: int) -> str:
+def generate_numeric_login_code(length: int) -> str:
     if length < 4 or length > 10:
         raise ValueError("login code length must be between 4 and 10")
     upper = 10**length
     n = secrets.randbelow(upper)
     return str(n).zfill(length)
+
+
+def _generate_numeric_code(length: int) -> str:
+    return generate_numeric_login_code(length)
 
 
 def _hash_code(code: str, *, salt: str) -> str:
@@ -93,7 +97,7 @@ async def request_admin_login(
     code_length: int,
 ) -> AdminLoginCode:
     """Mint a new one-time code, overwriting any previous outstanding one."""
-    code = _generate_numeric_code(code_length)
+    code = generate_numeric_login_code(code_length)
     digest = _hash_code(code, salt=secret)
     await redis.set(_key("hash", telegram_id), digest, ex=ttl_seconds)
     return AdminLoginCode(code=code, ttl_seconds=ttl_seconds)
