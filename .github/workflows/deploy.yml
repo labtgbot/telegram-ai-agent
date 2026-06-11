@@ -141,7 +141,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/kubeconform-linux-amd64.tar.gz" -C "$RUNNER_TEMP/bin" kubeconform
           chmod 0755 "$RUNNER_TEMP/bin/kubeconform"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-          kubeconform -v
+          "$RUNNER_TEMP/bin/kubeconform" -v
 
       - name: Validate Kubernetes manifests against schemas
         run: |
