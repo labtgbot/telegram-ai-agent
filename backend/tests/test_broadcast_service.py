@@ -874,6 +874,79 @@ async def test_drain_broadcast_retries_on_429(db_session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_drain_broadcast_retries_repeated_429_without_premature_failure(
+    db_session,
+) -> None:
+    admin = await _make_user(db_session, role="support_admin")
+    u1 = await _make_user(db_session)
+    u2 = await _make_user(db_session)
+
+    broadcast = await create_broadcast(
+        db_session,
+        admin=admin,
+        draft=_draft(
+            audience=BROADCAST_AUDIENCE_CUSTOM,
+            audience_filter={"telegram_ids": [u1.telegram_id, u2.telegram_id]},
+        ),
+    )
+    await db_session.commit()
+
+    queued = await fetch_pending_recipients(
+        db_session,
+        broadcast_id=broadcast.id,
+        batch_size=10,
+    )
+    rate_limited_chat_id = queued[0].telegram_id
+    next_chat_id = queued[1].telegram_id
+
+    client = _FakeTelegramClient(
+        script={
+            rate_limited_chat_id: [
+                {"raise": "Too Many Requests: retry after 2", "code": 429},
+                {"raise": "Too Many Requests: retry after 3", "code": 429},
+                {"result": {"message_id": 777}},
+            ]
+        }
+    )
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    drained = await drain_broadcast(
+        db_session,
+        client,
+        broadcast=broadcast,
+        rate_limit=50,
+        sleeper=fake_sleep,
+    )
+
+    recipient = (
+        await db_session.execute(
+            select(BroadcastRecipient).where(
+                BroadcastRecipient.broadcast_id == broadcast.id,
+                BroadcastRecipient.telegram_id == rate_limited_chat_id,
+            )
+        )
+    ).scalar_one()
+    await db_session.refresh(drained)
+
+    assert [call["chat_id"] for call in client.calls] == [
+        rate_limited_chat_id,
+        rate_limited_chat_id,
+        rate_limited_chat_id,
+        next_chat_id,
+    ]
+    assert sleeps[:2] == [2.0, 3.0]
+    assert recipient.status == RECIPIENT_STATUS_DELIVERED
+    assert recipient.error is None
+    assert drained.delivered_count == 2
+    assert drained.failed_count == 0
+    assert drained.status == BROADCAST_STATUS_COMPLETED
+
+
+@pytest.mark.asyncio
 async def test_drain_broadcast_stops_when_cancelled_mid_flight(db_session) -> None:
     admin = await _make_user(db_session, role="support_admin")
     u1 = await _make_user(db_session)
