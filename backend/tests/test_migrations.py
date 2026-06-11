@@ -115,9 +115,8 @@ def test_default_partition_exists_after_upgrade(database_url):
 @pytest.mark.parametrize(
     "index_name",
     [
-        "ix_users_telegram_id",
         "ix_users_premium",
-        "ix_users_referral",
+        "ix_users_role",
         "ix_transactions_user_id",
         "ix_transactions_type",
         "ix_transactions_created",
@@ -140,3 +139,25 @@ def test_index_exists(database_url, index_name):
         count = result.scalar_one()
     engine.dispose()
     assert count == 1, f"Missing index: {index_name}"
+
+
+@pytest.mark.parametrize(
+    "index_name",
+    [
+        "ix_users_telegram_id",
+        "ix_users_referral",
+    ],
+)
+def test_redundant_user_index_is_absent(database_url, index_name):
+    engine = create_engine(_sync_url(database_url), future=True)
+    with engine.connect() as conn:
+        result = conn.execute(
+            text(
+                "SELECT count(*) FROM pg_indexes "
+                "WHERE schemaname = 'public' AND indexname = :name"
+            ),
+            {"name": index_name},
+        )
+        count = result.scalar_one()
+    engine.dispose()
+    assert count == 0, f"Redundant index should be absent: {index_name}"
