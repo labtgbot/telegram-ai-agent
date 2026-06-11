@@ -27,7 +27,7 @@ export default defineConfig({
   },
   build: {
     target: "es2022",
-    sourcemap: true,
+    sourcemap: false,
     outDir: "dist",
     // ``vite build`` reports per-chunk *uncompressed* size; the issue's
     // 200 KB gzipped budget maps to roughly 600 KB raw, but we keep the

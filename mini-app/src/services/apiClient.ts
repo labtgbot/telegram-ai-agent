@@ -1,4 +1,7 @@
 import { getInitData } from "@/services/telegram";
+import { ApiError } from "@/services/apiError";
+
+export { ApiError };
 
 const DEFAULT_BASE_URL = "/api/v1";
 
@@ -12,18 +15,6 @@ export interface RequestOptions extends Omit<RequestInit, "body" | "headers"> {
   query?: Record<string, string | number | boolean | undefined | null>;
   headers?: HeadersInit;
   json?: unknown;
-}
-
-export class ApiError extends Error {
-  readonly status: number;
-  readonly body: unknown;
-
-  constructor(message: string, status: number, body: unknown) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.body = body;
-  }
 }
 
 function joinUrl(base: string, path: string): string {
