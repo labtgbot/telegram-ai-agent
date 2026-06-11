@@ -67,6 +67,7 @@ logger = get_logger(__name__)
 # Telegram Bot API allows 30 messages per second across all chats — we
 # stay just under the cap to absorb retries and clock drift.
 TELEGRAM_BROADCAST_RATE_LIMIT = 25
+BROADCAST_RATE_LIMIT_MAX_RETRIES = 5
 
 # Maximum length of the inline message body (Telegram caps at 4096 chars).
 MAX_TEXT_LEN = 4096
@@ -798,6 +799,7 @@ async def drain_broadcast(
     *,
     broadcast: Broadcast,
     rate_limit: int = TELEGRAM_BROADCAST_RATE_LIMIT,
+    max_rate_limit_retries: int = BROADCAST_RATE_LIMIT_MAX_RETRIES,
     max_batches: int | None = None,
     sleeper: Any = asyncio.sleep,
     now_fn: Any = None,
@@ -810,6 +812,7 @@ async def drain_broadcast(
     """
     if rate_limit <= 0:
         rate_limit = 1
+    max_rate_limit_retries = max(int(max_rate_limit_retries), 0)
     interval = 1.0 / float(rate_limit)
     now_fn = now_fn or (lambda: datetime.now(UTC))
 
@@ -844,17 +847,34 @@ async def drain_broadcast(
             if broadcast.status == BROADCAST_STATUS_CANCELLED:
                 return broadcast
             result = await send_one(client, broadcast, recipient.telegram_id)
-            if not result.delivered and result.retry_after is not None:
+            rate_limit_retries = 0
+            while (
+                not result.delivered
+                and result.retry_after is not None
+                and rate_limit_retries < max_rate_limit_retries
+            ):
+                rate_limit_retries += 1
                 wait = max(result.retry_after, interval)
                 logger.warning(
                     "broadcast.rate_limited",
                     broadcast_id=broadcast.id,
                     retry_after=wait,
+                    retry=rate_limit_retries,
+                    max_retries=max_rate_limit_retries,
                 )
                 await sleeper(wait)
-                # Re-send after backoff; do not count the rate-limited
-                # attempt against the recipient.
+                await session.refresh(broadcast)
+                if broadcast.status == BROADCAST_STATUS_CANCELLED:
+                    return broadcast
                 result = await send_one(client, broadcast, recipient.telegram_id)
+
+            if not result.delivered and result.retry_after is not None:
+                logger.warning(
+                    "broadcast.rate_limit_retries_exhausted",
+                    broadcast_id=broadcast.id,
+                    retry_after=result.retry_after,
+                    max_retries=max_rate_limit_retries,
+                )
 
             await record_recipient_result(
                 session,
