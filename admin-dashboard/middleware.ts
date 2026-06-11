@@ -7,13 +7,14 @@ const PUBLIC_PATHS = ["/login", "/api/auth/login/request", "/api/auth/login/veri
 
 /**
  * Route → minimum required role. Missing entries default to `analyst`
- * (every admin can see the dashboard, but only specific roles edit pricing
- * or run broadcasts).
+ * for read-only dashboards; operational areas are listed explicitly.
  */
 const ROUTE_ROLES: Array<{ prefix: string; required: Role }> = [
   { prefix: "/pricing", required: "super_admin" },
   { prefix: "/settings", required: "super_admin" },
+  { prefix: "/system", required: "super_admin" },
   { prefix: "/broadcast", required: "support_admin" },
+  { prefix: "/content", required: "support_admin" },
   { prefix: "/users", required: "support_admin" },
   { prefix: "/transactions", required: "support_admin" },
 ];

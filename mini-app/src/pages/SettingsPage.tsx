@@ -6,8 +6,10 @@ import { Card } from "@/components/Card";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Select } from "@/components/Select";
 import { Switch } from "@/components/Switch";
+import type { TranslationKey } from "@/i18n";
 import { useTranslation } from "@/i18n/useTranslation";
-import { userApi } from "@/services/userApi";
+import { Sentry } from "@/lib/sentry";
+import { ApiError, userApi } from "@/services/userApi";
 import type { AiResponseSize } from "@/store/useSettingsStore";
 import { useSettingsStore } from "@/store/useSettingsStore";
 import { useThemeStore } from "@/store/useThemeStore";
@@ -23,6 +25,23 @@ const idle: Status = { kind: "idle" };
 
 function isEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function operationErrorMessage(
+  err: unknown,
+  t: (key: TranslationKey) => string,
+  keys: { auth: TranslationKey; notFound: TranslationKey; fallback: TranslationKey },
+): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401 || err.status === 403) {
+      return t(keys.auth);
+    }
+    if (err.status === 404) {
+      return t(keys.notFound);
+    }
+  }
+  Sentry.captureException(err);
+  return t(keys.fallback);
 }
 
 export function SettingsPage(): ReactElement {
@@ -69,8 +88,15 @@ export function SettingsPage(): ReactElement {
       await userApi.requestDataExport({ email: exportEmail });
       setExportStatus({ kind: "ok", message: t("settings.dataExportSuccess") });
       setExportEmail("");
-    } catch {
-      setExportStatus({ kind: "error", message: t("settings.dataExportError") });
+    } catch (err) {
+      setExportStatus({
+        kind: "error",
+        message: operationErrorMessage(err, t, {
+          auth: "settings.dataExportAuthError",
+          notFound: "settings.dataExportUnavailable",
+          fallback: "settings.dataExportError",
+        }),
+      });
     } finally {
       setExportSubmitting(false);
     }
@@ -84,8 +110,15 @@ export function SettingsPage(): ReactElement {
       setDeleteStatus({ kind: "ok", message: t("settings.deleteAccountSuccess") });
       setDeleteDialogOpen(false);
       resetUser();
-    } catch {
-      setDeleteStatus({ kind: "error", message: t("settings.deleteAccountError") });
+    } catch (err) {
+      setDeleteStatus({
+        kind: "error",
+        message: operationErrorMessage(err, t, {
+          auth: "settings.deleteAccountAuthError",
+          notFound: "settings.deleteAccountUnavailable",
+          fallback: "settings.deleteAccountError",
+        }),
+      });
     } finally {
       setDeleteSubmitting(false);
     }

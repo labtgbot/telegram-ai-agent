@@ -201,6 +201,7 @@ export interface VideoJobResponse {
   status: "pending" | "queued" | "in_progress" | "succeeded" | "failed" | "refunded";
   result_url: string | null;
   tokens_cost: number;
+  new_balance?: number;
   prompt: string;
   request_id: string;
 }

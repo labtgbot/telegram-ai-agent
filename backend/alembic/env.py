@@ -3,6 +3,7 @@
 Reads the database URL from the ``DATABASE_URL`` env var (with a sensible
 local default), falling back to ``alembic.ini`` only as a last resort.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +23,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app.core.alembic_autogenerate import include_name, include_object  # noqa: E402
 from app.models import Base  # noqa: E402  (after sys.path tweak)
 
 config = context.config
@@ -54,6 +56,8 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         compare_server_default=True,
+        include_name=include_name,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -65,6 +69,8 @@ def _do_run_migrations(connection: Connection) -> None:
         target_metadata=target_metadata,
         compare_type=True,
         compare_server_default=True,
+        include_name=include_name,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()

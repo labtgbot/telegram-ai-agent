@@ -31,6 +31,7 @@ function makeId(prefix: string): string {
 
 export function ChatPage(): ReactElement {
   const user = useUserStore((s) => s.user);
+  const setBalance = useUserStore((s) => s.setBalance);
   const threadId = useChatStore((s) => s.threadId);
   const mode = useChatStore((s) => s.mode);
   const messages = useChatStore((s) => s.messages);
@@ -122,6 +123,7 @@ export function ChatPage(): ReactElement {
         documentContexts.push(
           `Document "${att.name}" (${result.format}) summary:\n${result.summary ?? result.text.slice(0, 2000)}`,
         );
+        setBalance(result.new_balance);
       } catch (err) {
         documentContexts.push(`Document "${att.name}" could not be analysed.`);
         console.warn("document analysis failed", err);
@@ -145,12 +147,14 @@ export function ChatPage(): ReactElement {
         {
           onStart: () => patchMessage(assistantId, { status: "streaming" }),
           onDelta: (delta) => appendAssistantDelta(assistantId, delta),
-          onFinal: (final) =>
+          onFinal: (final) => {
+            setBalance(final.new_balance);
             finalizeMessage(assistantId, {
               status: "complete",
               tokensSpent: final.tokens_spent,
               mode: final.mode,
-            }),
+            });
+          },
           onError: (e) => {
             finalizeMessage(assistantId, { status: "error" });
             patchMessage(assistantId, { error: e.message });
@@ -177,6 +181,7 @@ export function ChatPage(): ReactElement {
     mode,
     patchMessage,
     pendingAttachments,
+    setBalance,
     setDraft,
     setError,
     setSending,
@@ -214,6 +219,7 @@ export function ChatPage(): ReactElement {
           });
           try {
             const result = await generateImage(prompt);
+            setBalance(result.new_balance);
             finalizeMessage(assistantId, {
               status: "complete",
               tokensSpent: result.tokens_spent,
@@ -266,6 +272,9 @@ export function ChatPage(): ReactElement {
           });
           try {
             const job = await submitVideoJob(prompt);
+            if (typeof job.new_balance === "number") {
+              setBalance(job.new_balance);
+            }
             patchMessage(assistantId, {
               content:
                 job.status === "succeeded" && job.result_url
@@ -323,6 +332,7 @@ export function ChatPage(): ReactElement {
           });
           try {
             const res = await runWebSearch(query);
+            setBalance(res.new_balance);
             patchMessage(assistantId, {
               content: res.summary ?? `Found ${res.results.length} results for "${query}".`,
               attachments: [
@@ -356,7 +366,16 @@ export function ChatPage(): ReactElement {
           return;
       }
     },
-    [appendMessage, draft, finalizeMessage, patchMessage, setDraft, setError, setSending],
+    [
+      appendMessage,
+      draft,
+      finalizeMessage,
+      patchMessage,
+      setBalance,
+      setDraft,
+      setError,
+      setSending,
+    ],
   );
 
   const handleAttachmentAdded = useCallback(
