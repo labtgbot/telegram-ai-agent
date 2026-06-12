@@ -1,0 +1,12 @@
+{{- $env := lower (toString (default "" .Values.config.APP_ENV)) -}}
+{{- $mode := lower (toString (default "real" .Values.config.COMPOSIO_MODE)) -}}
+{{- $protectedEnv := or (eq $env "production") (eq $env "staging") -}}
+{{- if and (ne $mode "real") (ne $mode "mock") -}}
+{{- fail "config.COMPOSIO_MODE must be either 'real' or 'mock'" -}}
+{{- end -}}
+{{- if and $protectedEnv (eq $mode "mock") -}}
+{{- fail "config.COMPOSIO_MODE=mock is not allowed when config.APP_ENV is production or staging" -}}
+{{- end -}}
+{{- if and $protectedEnv .Values.secret.create (not (trim (toString (default "" .Values.secret.defaults.COMPOSIO_API_KEY)))) -}}
+{{- fail "secret.defaults.COMPOSIO_API_KEY must be set when secret.create=true for production or staging" -}}
+{{- end -}}

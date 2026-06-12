@@ -180,10 +180,10 @@ _composio_client_singleton: ComposioClient | None = None
 def get_composio_client() -> ComposioClient:
     """Return a process-wide :class:`ComposioClient`.
 
-    The factory in :func:`app.services.composio.build_client` already
-    picks the mock client when credentials are missing — we just cache
-    the instance so the underlying ``httpx.AsyncClient`` is reused
-    across requests.
+    The factory in :func:`app.services.composio.build_client` enforces
+    ``COMPOSIO_MODE`` / ``COMPOSIO_API_KEY`` safety. We only cache the
+    instance so the underlying ``httpx.AsyncClient`` is reused across
+    requests.
     """
     global _composio_client_singleton
     if _composio_client_singleton is None:

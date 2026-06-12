@@ -26,6 +26,7 @@ def test_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert s.trusted_proxy_ips == ""
     assert s.telegram_update_idempotency_ttl_seconds == 604800
     assert s.is_development is True
+    assert s.composio_mode == "real"
 
 
 def test_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -130,10 +131,47 @@ def test_assert_production_safe_blocks_empty_webhook_secret() -> None:
     assert "TELEGRAM_WEBHOOK_SECRET" in str(excinfo.value)
 
 
+def test_assert_production_safe_blocks_empty_composio_key_in_production() -> None:
+    config_module = _fresh_config_module()
+    settings = config_module.Settings(
+        app_env="production",
+        admin_jwt_secret="a-real-long-random-secret-9f8e",
+        telegram_webhook_secret="webhook-secret",
+        composio_api_key="",
+    )
+    with pytest.raises(config_module.InsecureDefaultSecretError) as excinfo:
+        settings.assert_production_safe()
+    assert "COMPOSIO_API_KEY" in str(excinfo.value)
+
+
+def test_assert_production_safe_blocks_mock_composio_mode_outside_dev() -> None:
+    config_module = _fresh_config_module()
+    settings = config_module.Settings(
+        app_env="staging",
+        admin_jwt_secret="a-real-long-random-secret-9f8e",
+        telegram_webhook_secret="webhook-secret",
+        composio_mode="mock",
+        composio_api_key="real-key-present",
+    )
+    with pytest.raises(config_module.InsecureDefaultSecretError) as excinfo:
+        settings.assert_production_safe()
+    assert "COMPOSIO_MODE" in str(excinfo.value)
+
+
 def test_assert_production_safe_allows_dev_with_default_secret() -> None:
     config_module = _fresh_config_module()
     for env in ("development", "local", "test", "ci"):
         config_module.Settings(app_env=env, admin_jwt_secret="change-me").assert_production_safe()
+
+
+def test_assert_production_safe_allows_dev_with_explicit_mock_composio() -> None:
+    config_module = _fresh_config_module()
+    config_module.Settings(
+        app_env="development",
+        admin_jwt_secret="change-me",
+        composio_mode="mock",
+        composio_api_key="",
+    ).assert_production_safe()
 
 
 def test_assert_production_safe_allows_custom_secret_in_production() -> None:
@@ -142,4 +180,5 @@ def test_assert_production_safe_allows_custom_secret_in_production() -> None:
         app_env="production",
         admin_jwt_secret="a-real-long-random-secret-9f8e",
         telegram_webhook_secret="webhook-secret",
+        composio_api_key="composio-secret",
     ).assert_production_safe()

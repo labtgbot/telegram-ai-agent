@@ -26,7 +26,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
-from app.core.config import Settings, get_settings
+from app.core.config import COMPOSIO_MODE_REAL, Settings, get_settings
 from app.core.logging import get_logger
 from app.services.composio.errors import (
     ComposioAuthError,
@@ -255,28 +255,42 @@ class HttpComposioClient:
         return min(delay, self._backoff_max)
 
 
-def build_client(settings: Settings | None = None) -> ComposioClient:
-    """Factory: return the real client when credentials are present, mock otherwise.
-
-    This is the entry point most of the codebase should use — it keeps
-    test environments free of network dependencies without leaking the
-    mock import path into call sites.
-    """
+def _build_mock_client(cfg: Settings) -> ComposioClient:
     from app.services.composio.mock import MockComposioClient
 
+    client = MockComposioClient(default_user_id=cfg.composio_default_user_id or None)
+    # Load-test hook: when COMPOSIO_MOCK_TEXT_RESPONSE is set, the mock
+    # returns a text payload the generation pipeline can extract instead
+    # of the default {"echo": params} stub. Lets locust drive the full
+    # /generate/text happy path without a real provider.
+    mock_text = os.environ.get("COMPOSIO_MOCK_TEXT_RESPONSE", "").strip()
+    if mock_text:
+        for tool in {SERVICE_TYPE_TO_TOOL["text"], SERVICE_TYPE_TO_TOOL["chat"]}:
+            client.set_response(tool, data={"text": mock_text})
+    return client
+
+
+def build_client(settings: Settings | None = None) -> ComposioClient:
+    """Factory: build the configured Composio client.
+
+    ``COMPOSIO_MODE=real`` requires ``COMPOSIO_API_KEY`` and returns the HTTP
+    client. ``COMPOSIO_MODE=mock`` returns the in-memory mock only for explicit
+    non-production environments.
+    """
     cfg = settings or get_settings()
+    mode = cfg.composio_mode_normalized
+    if cfg.composio_mock_enabled:
+        if not cfg.is_non_production:
+            raise ComposioAuthError(
+                "COMPOSIO_MODE=mock is only allowed when APP_ENV is development, "
+                "dev, local, test, or ci"
+            )
+        logger.info("composio.using_mock", reason="explicit_mock_mode")
+        return _build_mock_client(cfg)
+    if mode != COMPOSIO_MODE_REAL:
+        raise ComposioError("COMPOSIO_MODE must be either 'real' or 'mock'")
     if not cfg.composio_enabled:
-        logger.info("composio.using_mock", reason="missing_api_key")
-        client = MockComposioClient(default_user_id=cfg.composio_default_user_id or None)
-        # Load-test hook: when COMPOSIO_MOCK_TEXT_RESPONSE is set, the mock
-        # returns a text payload the generation pipeline can extract instead
-        # of the default {"echo": params} stub. Lets locust drive the full
-        # /generate/text happy path without a real provider.
-        mock_text = os.environ.get("COMPOSIO_MOCK_TEXT_RESPONSE", "").strip()
-        if mock_text:
-            for tool in {SERVICE_TYPE_TO_TOOL["text"], SERVICE_TYPE_TO_TOOL["chat"]}:
-                client.set_response(tool, data={"text": mock_text})
-        return client
+        raise ComposioAuthError("COMPOSIO_API_KEY is required when COMPOSIO_MODE=real")
     return HttpComposioClient(
         api_key=cfg.composio_api_key,
         base_url=cfg.composio_base_url,

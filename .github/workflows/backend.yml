@@ -277,7 +277,8 @@ jobs:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/telegram_ai_agent
       REDIS_URL: redis://localhost:6379/0
       TELEGRAM_BOT_TOKEN: "1234567890:LOAD-SMOKE-AAAAAAAAAAAAAAAAAAAAAA"
-      # Force the mock Composio path even if a key leaks into the env.
+      # Force the explicit mock Composio path even if a key leaks into the env.
+      COMPOSIO_MODE: "mock"
       COMPOSIO_API_KEY: ""
       # Tell build_client to seed the mock with a real text payload so
       # /generate/text returns 200 instead of raising TextProviderError.

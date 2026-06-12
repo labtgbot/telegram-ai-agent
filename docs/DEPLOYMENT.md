@@ -222,7 +222,8 @@ AI/tooling keys:
 | `GEMINI_API_KEY` | If Gemini is enabled | Gemini API key. |
 | `ANTHROPIC_API_KEY` | If Anthropic is enabled | Anthropic API key. |
 | `OPENAI_API_KEY` | If OpenAI is enabled | OpenAI API key. |
-| `COMPOSIO_API_KEY` | If real Composio calls are enabled | Empty value switches the backend to mock Composio client behavior. |
+| `COMPOSIO_MODE` | Yes | Use `real` in staging/production. `mock` is accepted only in `development`, `dev`, `local`, `test`, and `ci`. |
+| `COMPOSIO_API_KEY` | Yes when `COMPOSIO_MODE=real` | Composio API key. Empty values fail startup in staging/production and fail client creation in real mode. |
 | `COMPOSIO_DEFAULT_USER_ID` | Optional | Default connected account/user for Composio tool calls. |
 | `COMPOSIO_DEFAULT_TOOLKITS` | Optional | Comma-separated toolkit list. |
 
@@ -611,7 +612,8 @@ NEXT_PUBLIC_API_BASE_URL=https://bot.example.com/api/v1
 GEMINI_API_KEY=
 ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
-COMPOSIO_API_KEY=
+COMPOSIO_MODE=real
+COMPOSIO_API_KEY=<composio api key>
 
 PAYMENT_CURRENCY=XTR
 PAYMENT_PROVIDER_TOKEN=

@@ -84,6 +84,8 @@ services:
       LOG_FORMAT: json
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/telegram_ai_agent
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.prod}@redis:6379/0
+      COMPOSIO_MODE: real
+      COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:?COMPOSIO_API_KEY must be set in .env.prod}
     tmpfs:
       - /tmp:uid=1000,gid=1000,mode=1777
     healthcheck:
