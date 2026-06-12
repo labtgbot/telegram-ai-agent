@@ -14,9 +14,11 @@ the workflow below applies.
 1. Age-restricted features stay disabled until the user passes the
    verification flow described in Section 3.
 2. We follow **data minimisation** — we never store identity documents.
-   Only a derived `age_verified_at` boolean / timestamp is persisted.
-3. Verification can be withdrawn by the user via Settings; doing so
-   re-locks the feature.
+   The current stub stores no derived age state. Once a provider integration
+   ships, only a derived `age_verified_at` timestamp and provider metadata
+   will be persisted.
+3. Provider-backed verification can be withdrawn by the user via Settings;
+   doing so re-locks the feature.
 4. Failure cases (verification declined, mismatch) do not block the rest
    of the Service.
 
@@ -26,9 +28,15 @@ Phase 4 (current) ships the **policy + endpoint stub**:
 
 - `GET /api/v1/user/me/age-verification` — returns the current state.
 - `POST /api/v1/user/me/age-verification` — feature-flag gated stub. In
-  development it accepts a `confirmed_18_plus: true` self-declaration; in
-  production this route is **disabled** until a verified provider is
-  wired up (e.g. Telegram Passport, Veriff, Yoti).
+  development it accepts a `confirmed_18_plus: true` self-declaration and
+  returns a one-shot success response, but does not persist
+  `age_verified_at`; the next `GET` still reports `verified=false` and
+  `verified_at=null`.
+
+In production, `self_declared` is blocked. Configuring a real provider before
+its backend client is wired up returns `501
+age_verification_provider_not_integrated`, so production users are not marked
+as verified by the stub.
 
 The endpoint is enabled by setting the env var
 `COMPLIANCE_AGE_GATE_ENABLED=true` and only operates in environments
@@ -39,9 +47,12 @@ A production-grade provider integration is **out of scope for this
 issue** and will be added in a follow-up when a 18+ feature actually
 ships.
 
-## Data flows when enabled
+## Future provider requirements
 
-1. The Mini App calls `POST /user/me/age-verification` with the proof
+The current stub stops before persistence. When a production provider is
+integrated, the follow-up implementation must satisfy this flow:
+
+1. The Mini App calls `POST /api/v1/user/me/age-verification` with the proof
    produced by the chosen provider (e.g. a signed Telegram Passport
    payload or a verification job ID from Veriff).
 2. The backend validates the proof, stores `age_verified_at` and the
@@ -50,8 +61,11 @@ ships.
 
 ## Audit & retention
 
-- Audit log entry on every state change (verified / revoked).
-- `age_verified_at` is cleared on account deletion (see
+- The current stub writes no verification audit entry and stores no
+  `age_verified_at` value.
+- Provider-backed verification must create an audit log entry on every state
+  change (verified / revoked).
+- Persisted `age_verified_at` is cleared on account deletion (see
   [`PRIVACY_POLICY.md`](PRIVACY_POLICY.md) §7).
 - The audit log is retained for 12 months.
 
