@@ -3,6 +3,7 @@
 Runs without a database — guards the contract between models and
 ``docs/DATABASE_SCHEMA.md``.
 """
+
 from __future__ import annotations
 
 import sys
@@ -23,6 +24,7 @@ from sqlalchemy import (  # noqa: E402
 
 from app.models import (  # noqa: E402
     AccountDeletionRequest,
+    AdminRefreshSession,
     AdminSetting,
     Base,
     DailyAnalytics,
@@ -40,6 +42,7 @@ def test_all_tables_registered():
         "transactions",
         "token_usage_logs",
         "admin_settings",
+        "admin_refresh_sessions",
         "daily_analytics",
         "subscriptions",
         "account_deletion_requests",
@@ -99,9 +102,7 @@ def test_user_indexes_present():
 
 
 def test_transaction_check_constraint():
-    constraints = [
-        c for c in Transaction.__table__.constraints if isinstance(c, CheckConstraint)
-    ]
+    constraints = [c for c in Transaction.__table__.constraints if isinstance(c, CheckConstraint)]
     assert constraints, "transactions table must have a CHECK constraint"
     assert any("purchase" in str(c.sqltext) for c in constraints)
     assert any("manual_bonus" in str(c.sqltext) for c in constraints)
@@ -134,9 +135,7 @@ def test_model_create_all_emits_migration_aligned_indexes():
     ) in ddl
     assert "CREATE INDEX ix_transactions_payment_status ON transactions (payment_status)" in ddl
     assert "CREATE INDEX ix_transactions_created ON transactions (created_at DESC)" in ddl
-    assert (
-        "CREATE INDEX ix_token_usage_logs_created ON token_usage_logs (created_at DESC)"
-    ) in ddl
+    assert ("CREATE INDEX ix_token_usage_logs_created ON token_usage_logs (created_at DESC)") in ddl
     assert (
         "CREATE UNIQUE INDEX uq_welcome_messages_active_per_locale "
         "ON welcome_messages (locale) WHERE is_active"
@@ -166,6 +165,37 @@ def test_admin_setting_columns():
     assert {"id", "setting_key", "setting_value", "updated_by", "updated_at"} == set(cols.keys())
     assert isinstance(cols["id"].type, Integer)
     assert cols["setting_key"].unique is True
+
+
+def test_admin_refresh_session_columns_and_indexes():
+    table = AdminRefreshSession.__table__
+    assert {
+        "id",
+        "user_id",
+        "jti_hash",
+        "role",
+        "issued_at",
+        "expires_at",
+        "used_at",
+        "revoked_at",
+        "revocation_reason",
+        "parent_session_id",
+        "replaced_by_session_id",
+        "created_at",
+    } == set(table.columns.keys())
+    assert isinstance(table.c.id.type, BigInteger)
+    assert isinstance(table.c.user_id.type, BigInteger)
+    assert table.c.jti_hash.unique is True
+    assert isinstance(table.c.issued_at.type, DateTime)
+    assert table.c.issued_at.type.timezone is True
+
+    index_names = {ix.name for ix in table.indexes}
+    assert {
+        "ix_admin_refresh_sessions_user_id",
+        "ix_admin_refresh_sessions_expires_at",
+        "ix_admin_refresh_sessions_parent",
+        "ix_admin_refresh_sessions_replaced_by",
+    } <= index_names
 
 
 def test_daily_analytics_primary_key_is_date():

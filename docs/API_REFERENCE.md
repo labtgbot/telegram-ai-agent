@@ -27,11 +27,48 @@ back in sync.
 ## Authentication
 
 - User endpoints: `X-Telegram-Init-Data` header (signed by Telegram WebApp).
-- Admin endpoints: `Authorization: Bearer <admin_jwt>` + `X-Admin-ID`.
+- Admin API endpoints: `Authorization: Bearer <admin_access_jwt>`.
+  Access tokens are short-lived; refresh tokens are server-side sessions and
+  must be rotated through `/auth/admin/refresh`.
 - Bot webhook: `POST /api/v1/bot/webhook/{secret}` — secret rotated via
   `TELEGRAM_WEBHOOK_SECRET`; processed Telegram `update_id` values are
   remembered in Redis to short-circuit redeliveries.
 - Health probes (`/health`, `/health/live`, `/health/ready`) are public.
+
+### Admin Auth
+
+`POST /auth/admin/login/request` issues a one-time code for an admin
+Telegram ID. In development it returns the code in the response; in production
+delivery is via the bot.
+
+`POST /auth/admin/login/verify` exchanges the one-time code (and TOTP for
+super-admins with TOTP enabled) for:
+
+```json
+{
+  "access_token": "eyJ...",
+  "refresh_token": "eyJ...",
+  "token_type": "Bearer",
+  "expires_in": 900
+}
+```
+
+`POST /auth/admin/refresh` rotates the refresh token. The old refresh token is
+marked used/revoked server-side, and replaying it returns `401
+refresh_token_reused`. A revoked logout token returns `401
+refresh_token_revoked`; expired or malformed tokens return `401`.
+
+`POST /auth/admin/logout` revokes the active refresh session:
+
+```json
+{ "refresh_token": "eyJ..." }
+```
+
+Response (`200`):
+
+```json
+{ "status": "ok" }
+```
 
 ## User Endpoints
 

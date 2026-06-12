@@ -6,8 +6,10 @@
 * ``POST /auth/admin/login/verify`` — exchange code (+ optional TOTP) for
   access and refresh tokens.
 * ``POST /auth/admin/refresh`` — rotate access token using a refresh token.
+* ``POST /auth/admin/logout`` — revoke a refresh token server-side.
 * ``GET  /auth/admin/me`` — sanity-check the current admin's identity.
 """
+
 from __future__ import annotations
 
 from typing import Annotated, Any
@@ -26,6 +28,7 @@ from app.auth.dependencies import (
 )
 from app.auth.jwt import (
     InvalidTokenError,
+    TokenClaims,
     TokenExpiredError,
     create_access_token,
     create_refresh_token,
@@ -44,6 +47,16 @@ from app.services.admin_login import (
     generate_numeric_login_code,
     request_admin_login,
     verify_admin_login,
+)
+from app.services.admin_refresh_sessions import (
+    RefreshSessionExpiredError,
+    RefreshSessionReusedError,
+    RefreshSessionRevokedError,
+    RefreshSessionUnknownError,
+    RefreshSessionUserMismatchError,
+    create_refresh_session,
+    revoke_refresh_session,
+    rotate_refresh_session,
 )
 from app.services.rate_limit_config import (
     ACTION_ADMIN_LOGIN_REQUEST,
@@ -69,6 +82,7 @@ RedisDep = Annotated[Redis, Depends(_redis_dep)]
 
 
 # ---------------------------------------------------------------------- types
+
 
 class UserPublic(BaseModel):
     id: int
@@ -135,11 +149,20 @@ class AdminRefreshRequest(BaseModel):
     refresh_token: str
 
 
+class AdminLogoutRequest(BaseModel):
+    refresh_token: str
+
+
+class AdminLogoutResponse(BaseModel):
+    status: str = "ok"
+
+
 class AdminMeResponse(BaseModel):
     user: UserPublic
 
 
 # --------------------------------------------------------------- /telegram/verify
+
 
 @router.post(
     "/telegram/verify",
@@ -157,6 +180,7 @@ async def telegram_verify(
 
 
 # ------------------------------------------------------------- /admin/login/...
+
 
 async def _find_admin_candidate(session: AsyncSession, telegram_id: int) -> User | None:
     user = await find_user_by_telegram_id(session, telegram_id)
@@ -360,9 +384,16 @@ async def admin_login_verify(
             )
 
     await record_admin_login(session, user)
+    token_pair, refresh_claims = _mint_token_pair(user, settings)
+    await create_refresh_session(
+        session,
+        claims=refresh_claims,
+        user=user,
+        secret=settings.admin_jwt_secret,
+    )
     await session.commit()
 
-    return _mint_token_pair(user, settings)
+    return token_pair
 
 
 @router.post(
@@ -414,7 +445,80 @@ async def admin_refresh(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="not_an_admin",
         )
-    return _mint_token_pair(user, settings)
+    token_pair, next_refresh_claims = _mint_token_pair(user, settings)
+    try:
+        await rotate_refresh_session(
+            session,
+            current_claims=claims,
+            next_claims=next_refresh_claims,
+            user=user,
+            secret=settings.admin_jwt_secret,
+        )
+    except RefreshSessionExpiredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="refresh_token_expired",
+        ) from exc
+    except RefreshSessionReusedError as exc:
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="refresh_token_reused",
+        ) from exc
+    except RefreshSessionRevokedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="refresh_token_revoked",
+        ) from exc
+    except (RefreshSessionUnknownError, RefreshSessionUserMismatchError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid_refresh_token",
+        ) from exc
+
+    await session.commit()
+    return token_pair
+
+
+@router.post(
+    "/admin/logout",
+    response_model=AdminLogoutResponse,
+    summary="Revoke an admin refresh token",
+)
+async def admin_logout(
+    payload: AdminLogoutRequest,
+    settings: SettingsDep,
+    session: SessionDep,
+) -> AdminLogoutResponse:
+    try:
+        claims = decode_token(
+            payload.refresh_token,
+            secret=settings.admin_jwt_secret,
+            algorithm=settings.admin_jwt_algorithm,
+            expected_type="refresh",
+        )
+    except (TokenExpiredError, InvalidTokenError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid_refresh_token",
+        ) from exc
+
+    try:
+        await revoke_refresh_session(
+            session,
+            claims=claims,
+            secret=settings.admin_jwt_secret,
+            reason="logout",
+        )
+    except RefreshSessionReusedError as exc:
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="refresh_token_reused",
+        ) from exc
+
+    await session.commit()
+    return AdminLogoutResponse()
 
 
 @router.get(
@@ -431,7 +535,7 @@ async def admin_me(
 # ---------------------------------------------------------------- helpers
 
 
-def _mint_token_pair(user: User, settings: Any) -> TokenPairResponse:
+def _mint_token_pair(user: User, settings: Any) -> tuple[TokenPairResponse, TokenClaims]:
     access = create_access_token(
         subject=user.id,
         role=user.role,
@@ -446,8 +550,17 @@ def _mint_token_pair(user: User, settings: Any) -> TokenPairResponse:
         algorithm=settings.admin_jwt_algorithm,
         ttl_seconds=settings.admin_refresh_token_ttl,
     )
-    return TokenPairResponse(
-        access_token=access,
-        refresh_token=refresh,
-        expires_in=settings.admin_access_token_ttl,
+    refresh_claims = decode_token(
+        refresh,
+        secret=settings.admin_jwt_secret,
+        algorithm=settings.admin_jwt_algorithm,
+        expected_type="refresh",
+    )
+    return (
+        TokenPairResponse(
+            access_token=access,
+            refresh_token=refresh,
+            expires_in=settings.admin_access_token_ttl,
+        ),
+        refresh_claims,
     )

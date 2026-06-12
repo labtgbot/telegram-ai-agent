@@ -7,6 +7,7 @@ These tests are intentionally synchronous: ``alembic.command.upgrade`` runs
 its own ``asyncio.run`` (see ``alembic/env.py``), which conflicts with the
 event loop pytest-asyncio sets up for async tests.
 """
+
 from __future__ import annotations
 
 import os
@@ -38,6 +39,7 @@ EXPECTED_TABLES = {
     "transactions",
     "token_usage_logs",
     "admin_settings",
+    "admin_refresh_sessions",
     "daily_analytics",
     "subscriptions",
 }
@@ -82,31 +84,24 @@ def test_partitions_exist_after_upgrade(database_url):
     with engine.connect() as conn:
         result = conn.execute(
             text(
-                "SELECT count(*) FROM pg_inherits "
-                "WHERE inhparent = 'token_usage_logs'::regclass"
+                "SELECT count(*) FROM pg_inherits " "WHERE inhparent = 'token_usage_logs'::regclass"
             )
         )
         partition_count = result.scalar_one()
     engine.dispose()
-    assert partition_count >= 2, (
-        f"Expected at least 2 monthly partitions, got {partition_count}"
-    )
+    assert partition_count >= 2, f"Expected at least 2 monthly partitions, got {partition_count}"
 
 
 def test_default_partition_exists_after_upgrade(database_url):
     engine = create_engine(_sync_url(database_url), future=True)
     with engine.connect() as conn:
-        result = conn.execute(
-            text(
-                """
+        result = conn.execute(text("""
                 SELECT count(*)
                 FROM pg_inherits
                 JOIN pg_class child ON child.oid = pg_inherits.inhrelid
                 WHERE inhparent = 'token_usage_logs'::regclass
                   AND pg_get_expr(child.relpartbound, child.oid) = 'DEFAULT'
-                """
-            )
-        )
+                """))
         default_count = result.scalar_one()
     engine.dispose()
     assert default_count == 1
@@ -124,6 +119,10 @@ def test_default_partition_exists_after_upgrade(database_url):
         "ix_token_usage_logs_service",
         "ix_token_usage_logs_created",
         "ix_subscriptions_user",
+        "ix_admin_refresh_sessions_user_id",
+        "ix_admin_refresh_sessions_expires_at",
+        "ix_admin_refresh_sessions_parent",
+        "ix_admin_refresh_sessions_replaced_by",
     ],
 )
 def test_index_exists(database_url, index_name):

@@ -4,6 +4,7 @@ These exercise dependency wiring, error mapping, and the JWT round-trip.
 DB and Redis interactions are stubbed with in-memory fakes so the suite runs
 without external services.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -11,6 +12,7 @@ import hmac
 import json
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlencode
 
@@ -90,9 +92,7 @@ class FakeRedis:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
 
-    async def set(
-        self, key: str, value: str, *, ex: int | None = None, nx: bool = False
-    ) -> bool:
+    async def set(self, key: str, value: str, *, ex: int | None = None, nx: bool = False) -> bool:
         if nx and key in self.store:
             return False
         self.store[key] = value
@@ -175,9 +175,17 @@ def build_app(monkeypatch, fake_settings, fake_redis, fake_rate_limiter, stub_us
     from app.core import redis as redis_module
     from app.main import create_app
     from app.services import users as users_module
+    from app.services.admin_refresh_sessions import (
+        RefreshSessionReusedError,
+        RefreshSessionRevokedError,
+        RefreshSessionUnknownError,
+        RefreshSessionUserMismatchError,
+    )
 
     user_store: dict[int, FakeUser] = {stub_user.telegram_id: stub_user}
     fake_session = FakeSession()
+    refresh_sessions: dict[str, dict[str, Any]] = {}
+    next_refresh_session_id = 0
 
     async def fake_find_by_id(session, user_id):  # type: ignore[no-untyped-def]
         for u in user_store.values():
@@ -211,39 +219,112 @@ def build_app(monkeypatch, fake_settings, fake_redis, fake_rate_limiter, stub_us
         user.last_totp_timecode = timecode
         return True
 
+    def revoke_descendants(parent_id: int) -> None:
+        pending = [parent_id]
+        seen: set[int] = set()
+        while pending:
+            current_id = pending.pop()
+            if current_id in seen:
+                continue
+            seen.add(current_id)
+            for record in refresh_sessions.values():
+                if record["parent_session_id"] == current_id:
+                    record["revoked"] = True
+                    pending.append(record["id"])
+
+    async def fake_create_refresh_session(
+        session,
+        *,
+        claims,
+        user,
+        secret,
+        parent_session_id=None,
+    ):  # type: ignore[no-untyped-def]
+        nonlocal next_refresh_session_id
+        next_refresh_session_id += 1
+        refresh_sessions[claims.jti] = {
+            "id": next_refresh_session_id,
+            "user_id": user.id,
+            "used": False,
+            "revoked": False,
+            "parent_session_id": parent_session_id,
+            "replaced_by_session_id": None,
+        }
+        return SimpleNamespace(id=next_refresh_session_id)
+
+    async def fake_rotate_refresh_session(
+        session,
+        *,
+        current_claims,
+        next_claims,
+        user,
+        secret,
+    ):  # type: ignore[no-untyped-def]
+        current = refresh_sessions.get(current_claims.jti)
+        if current is None:
+            raise RefreshSessionUnknownError("missing")
+        if current["user_id"] != user.id:
+            raise RefreshSessionUserMismatchError("user mismatch")
+        if current["used"]:
+            revoke_descendants(current["id"])
+            raise RefreshSessionReusedError("reused")
+        if current["revoked"]:
+            raise RefreshSessionRevokedError("revoked")
+
+        successor = await fake_create_refresh_session(
+            session,
+            claims=next_claims,
+            user=user,
+            secret=secret,
+            parent_session_id=current["id"],
+        )
+        current["used"] = True
+        current["revoked"] = True
+        current["replaced_by_session_id"] = successor.id
+        return successor
+
+    async def fake_revoke_refresh_session(
+        session,
+        *,
+        claims,
+        secret,
+        reason="logout",
+    ):  # type: ignore[no-untyped-def]
+        current = refresh_sessions.get(claims.jti)
+        if current is None:
+            return False
+        if current["used"]:
+            revoke_descendants(current["id"])
+            raise RefreshSessionReusedError("reused")
+        current["revoked"] = True
+        return True
+
     async def fake_get_session():  # type: ignore[no-untyped-def]
         yield fake_session
 
     monkeypatch.setattr(users_module, "find_user_by_id", fake_find_by_id)
-    monkeypatch.setattr(
-        users_module, "find_user_by_telegram_id", fake_find_by_telegram_id
-    )
+    monkeypatch.setattr(users_module, "find_user_by_telegram_id", fake_find_by_telegram_id)
     monkeypatch.setattr(users_module, "upsert_telegram_user", fake_upsert)
     monkeypatch.setattr(users_module, "record_admin_login", fake_record_login)
-    monkeypatch.setattr(
-        users_module, "mark_totp_timecode_used", fake_mark_totp_timecode_used
-    )
+    monkeypatch.setattr(users_module, "mark_totp_timecode_used", fake_mark_totp_timecode_used)
     # The auth router imports symbols directly — patch them at the call site.
     monkeypatch.setattr(auth_module, "find_user_by_telegram_id", fake_find_by_telegram_id)
     monkeypatch.setattr(auth_module, "record_admin_login", fake_record_login)
-    monkeypatch.setattr(
-        auth_module, "mark_totp_timecode_used", fake_mark_totp_timecode_used
-    )
+    monkeypatch.setattr(auth_module, "mark_totp_timecode_used", fake_mark_totp_timecode_used)
+    monkeypatch.setattr(auth_module, "create_refresh_session", fake_create_refresh_session)
+    monkeypatch.setattr(auth_module, "rotate_refresh_session", fake_rotate_refresh_session)
+    monkeypatch.setattr(auth_module, "revoke_refresh_session", fake_revoke_refresh_session)
     monkeypatch.setattr(deps, "upsert_telegram_user", fake_upsert)
     monkeypatch.setattr(deps, "find_user_by_id", fake_find_by_id)
     monkeypatch.setattr(deps, "get_session", fake_get_session)
     monkeypatch.setattr(redis_module, "get_redis", lambda: fake_redis)
     monkeypatch.setattr("app.auth.dependencies.get_session", fake_get_session)
-    monkeypatch.setattr(
-        "app.core.config.get_settings", lambda: fake_settings, raising=True
-    )
+    monkeypatch.setattr("app.core.config.get_settings", lambda: fake_settings, raising=True)
     monkeypatch.setattr(
         "app.auth.dependencies.get_settings",
         lambda: fake_settings,
     )
-    monkeypatch.setattr(
-        "app.api.v1.auth.get_redis", lambda: fake_redis, raising=False
-    )
+    monkeypatch.setattr("app.api.v1.auth.get_redis", lambda: fake_redis, raising=False)
 
     app = create_app()
 
@@ -284,6 +365,7 @@ async def _client(app: Any) -> AsyncClient:
 
 
 # --------------------------------------------------------- tests
+
 
 @pytest.mark.asyncio
 async def test_telegram_verify_creates_user(build_app) -> None:
@@ -592,6 +674,151 @@ async def test_refresh_with_invalid_token(build_app) -> None:
             json={"refresh_token": "garbage"},
         )
     assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_admin_refresh_rejects_replayed_refresh_token(build_app) -> None:
+    app, _ = build_app
+    async with await _client(app) as c:
+        req = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
+        assert req.status_code == 200, req.text
+
+        verify = await c.post(
+            "/api/v1/auth/admin/login/verify",
+            json={"telegram_id": 42, "code": req.json()["code"]},
+        )
+        assert verify.status_code == 200, verify.text
+        refresh = verify.json()["refresh_token"]
+
+        rotated = await c.post(
+            "/api/v1/auth/admin/refresh",
+            json={"refresh_token": refresh},
+        )
+        assert rotated.status_code == 200, rotated.text
+
+        replay = await c.post(
+            "/api/v1/auth/admin/refresh",
+            json={"refresh_token": refresh},
+        )
+
+    assert replay.status_code == 401
+    assert replay.json()["detail"] == "refresh_token_reused"
+
+
+@pytest.mark.asyncio
+async def test_admin_refresh_reuse_revokes_successor_session(build_app) -> None:
+    app, _ = build_app
+    async with await _client(app) as c:
+        req = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
+        verify = await c.post(
+            "/api/v1/auth/admin/login/verify",
+            json={"telegram_id": 42, "code": req.json()["code"]},
+        )
+        original_refresh = verify.json()["refresh_token"]
+
+        rotated = await c.post(
+            "/api/v1/auth/admin/refresh",
+            json={"refresh_token": original_refresh},
+        )
+        assert rotated.status_code == 200, rotated.text
+        successor_refresh = rotated.json()["refresh_token"]
+
+        replay = await c.post(
+            "/api/v1/auth/admin/refresh",
+            json={"refresh_token": original_refresh},
+        )
+        assert replay.status_code == 401
+        assert replay.json()["detail"] == "refresh_token_reused"
+
+        successor = await c.post(
+            "/api/v1/auth/admin/refresh",
+            json={"refresh_token": successor_refresh},
+        )
+
+    assert successor.status_code == 401
+    assert successor.json()["detail"] == "refresh_token_revoked"
+
+
+@pytest.mark.asyncio
+async def test_admin_logout_revokes_refresh_session(build_app) -> None:
+    app, _ = build_app
+    async with await _client(app) as c:
+        req = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
+        verify = await c.post(
+            "/api/v1/auth/admin/login/verify",
+            json={"telegram_id": 42, "code": req.json()["code"]},
+        )
+        refresh = verify.json()["refresh_token"]
+
+        logout = await c.post(
+            "/api/v1/auth/admin/logout",
+            json={"refresh_token": refresh},
+        )
+        assert logout.status_code == 200, logout.text
+        assert logout.json()["status"] == "ok"
+
+        refreshed = await c.post(
+            "/api/v1/auth/admin/refresh",
+            json={"refresh_token": refresh},
+        )
+
+    assert refreshed.status_code == 401
+    assert refreshed.json()["detail"] == "refresh_token_revoked"
+
+
+@pytest.mark.asyncio
+async def test_admin_refresh_rejects_banned_admin(build_app) -> None:
+    app, store = build_app
+    async with await _client(app) as c:
+        req = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
+        verify = await c.post(
+            "/api/v1/auth/admin/login/verify",
+            json={"telegram_id": 42, "code": req.json()["code"]},
+        )
+        store[42].is_banned = True
+
+        refreshed = await c.post(
+            "/api/v1/auth/admin/refresh",
+            json={"refresh_token": verify.json()["refresh_token"]},
+        )
+
+    assert refreshed.status_code == 403
+    assert refreshed.json()["detail"] == "user_not_found_or_banned"
+
+
+@pytest.mark.asyncio
+async def test_admin_refresh_rejects_admin_who_lost_role(build_app) -> None:
+    app, store = build_app
+    async with await _client(app) as c:
+        req = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
+        verify = await c.post(
+            "/api/v1/auth/admin/login/verify",
+            json={"telegram_id": 42, "code": req.json()["code"]},
+        )
+        store[42].role = "user"
+
+        refreshed = await c.post(
+            "/api/v1/auth/admin/refresh",
+            json={"refresh_token": verify.json()["refresh_token"]},
+        )
+
+    assert refreshed.status_code == 403
+    assert refreshed.json()["detail"] == "not_an_admin"
 
 
 @pytest.mark.asyncio

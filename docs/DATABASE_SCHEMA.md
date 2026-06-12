@@ -116,6 +116,34 @@ CREATE TABLE admin_settings (
 );
 ```
 
+### admin_refresh_sessions
+```sql
+CREATE TABLE admin_refresh_sessions (
+    id                      BIGSERIAL PRIMARY KEY,
+    user_id                 BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    jti_hash                VARCHAR(64) UNIQUE NOT NULL,
+    role                    VARCHAR(32) NOT NULL,
+    issued_at               TIMESTAMPTZ NOT NULL,
+    expires_at              TIMESTAMPTZ NOT NULL,
+    used_at                 TIMESTAMPTZ,
+    revoked_at              TIMESTAMPTZ,
+    revocation_reason       VARCHAR(64),
+    parent_session_id       BIGINT REFERENCES admin_refresh_sessions(id) ON DELETE SET NULL,
+    replaced_by_session_id  BIGINT REFERENCES admin_refresh_sessions(id) ON DELETE SET NULL,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX ix_admin_refresh_sessions_user_id     ON admin_refresh_sessions(user_id);
+CREATE INDEX ix_admin_refresh_sessions_expires_at  ON admin_refresh_sessions(expires_at);
+CREATE INDEX ix_admin_refresh_sessions_parent      ON admin_refresh_sessions(parent_session_id);
+CREATE INDEX ix_admin_refresh_sessions_replaced_by ON admin_refresh_sessions(replaced_by_session_id);
+```
+
+Stores hashed admin refresh-token `jti` values. A successful refresh marks the
+current row `used_at`/`revoked_at` and links it to one successor; logout marks
+the active row revoked. Reuse of an already used token revokes the successor
+chain.
+
 ### daily_analytics
 ```sql
 CREATE TABLE daily_analytics (
