@@ -1,0 +1,19 @@
+{{- $env := lower (toString (default "" .Values.config.APP_ENV)) -}}
+{{- $protectedEnv := or (eq $env "production") (eq $env "staging") -}}
+{{- $absoluteHttpUrlPattern := "^https?://" -}}
+{{- $localUrlPattern := "(?i)^https?://(localhost|127\\.|0\\.0\\.0\\.0|\\[::1\\])(:|/|$)" -}}
+{{- if and .Values.admin.enabled $protectedEnv -}}
+{{- $apiBaseUrl := include "telegram-ai-agent.admin.apiBaseUrl" . -}}
+{{- $publicApiBaseUrl := include "telegram-ai-agent.admin.publicApiBaseUrl" . -}}
+{{- range $name, $value := dict "admin.apiBaseUrl" $apiBaseUrl "admin.publicApiBaseUrl" $publicApiBaseUrl -}}
+{{- if not (trim $value) -}}
+{{- fail (printf "%s must be set or derivable when admin.enabled=true and config.APP_ENV is production or staging" $name) -}}
+{{- end -}}
+{{- if not (regexMatch $absoluteHttpUrlPattern $value) -}}
+{{- fail (printf "%s must resolve to an absolute http(s) URL, got %q" $name $value) -}}
+{{- end -}}
+{{- if regexMatch $localUrlPattern $value -}}
+{{- fail (printf "%s must not point to localhost or loopback in production or staging, got %q" $name $value) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

@@ -245,6 +245,8 @@ services:
     environment:
       PORT: "3001"
       NODE_ENV: production
+      API_BASE_URL: ${API_BASE_URL:?API_BASE_URL must be set in .env.prod}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?NEXT_PUBLIC_API_BASE_URL must be set in .env.prod}
     tmpfs:
       - /tmp:uid=1000,gid=1000,mode=1777
       - /app/.next/cache:uid=1000,gid=1000,mode=755

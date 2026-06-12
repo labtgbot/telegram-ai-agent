@@ -20,6 +20,7 @@ COMPOSE_ENV_KEYS = {
     "ACME_EMAIL",
     "ADMIN_DOMAIN",
     "ADMIN_IMAGE",
+    "API_BASE_URL",
     "BACKEND_IMAGE",
     "CADDY_CONFIG_DIR",
     "CADDY_DATA_DIR",
@@ -28,6 +29,7 @@ COMPOSE_ENV_KEYS = {
     "GF_SECURITY_ADMIN_PASSWORD",
     "GF_SECURITY_ADMIN_USER",
     "MINI_APP_IMAGE",
+    "NEXT_PUBLIC_API_BASE_URL",
     "POSTGRES_PASSWORD",
     "REDIS_PASSWORD",
 }
@@ -44,6 +46,8 @@ VALID_ENV = {
     "BACKEND_IMAGE": "ghcr.io/labtgbot/telegram-ai-agent/backend:0.1.0",
     "MINI_APP_IMAGE": "ghcr.io/labtgbot/telegram-ai-agent/mini-app:0.1.0",
     "ADMIN_IMAGE": "ghcr.io/labtgbot/telegram-ai-agent/admin:0.1.0",
+    "API_BASE_URL": "http://backend:8000/api/v1",
+    "NEXT_PUBLIC_API_BASE_URL": "https://bot.example.com/api/v1",
 }
 
 
@@ -163,6 +167,22 @@ def test_prod_compose_requires_composio_api_key(tmp_path: Path) -> None:
     assert "COMPOSIO_API_KEY" in result.stderr
 
 
+def test_prod_compose_requires_admin_api_base_urls(tmp_path: Path) -> None:
+    _require_docker_compose()
+    env_without_admin_api_urls = {
+        key: value
+        for key, value in VALID_ENV.items()
+        if key not in {"API_BASE_URL", "NEXT_PUBLIC_API_BASE_URL"}
+    }
+
+    result = _run_compose_config(tmp_path, env_without_admin_api_urls)
+
+    assert result.returncode != 0
+    assert any(
+        env_var in result.stderr for env_var in ("API_BASE_URL", "NEXT_PUBLIC_API_BASE_URL")
+    )
+
+
 def test_prod_compose_hardening_contract(tmp_path: Path) -> None:
     _require_docker_compose()
 
@@ -214,6 +234,10 @@ def test_prod_compose_hardening_contract(tmp_path: Path) -> None:
     )
     assert services["backend"]["environment"]["COMPOSIO_MODE"] == "real"
     assert services["backend"]["environment"]["COMPOSIO_API_KEY"] == "composio-prod-key"
+    assert services["admin"]["environment"]["API_BASE_URL"] == "http://backend:8000/api/v1"
+    assert services["admin"]["environment"]["NEXT_PUBLIC_API_BASE_URL"] == (
+        "https://bot.example.com/api/v1"
+    )
 
     expected_worker_commands = {
         "broadcast-worker": ["python", "-m", "app.workers.broadcast", "--loop"],

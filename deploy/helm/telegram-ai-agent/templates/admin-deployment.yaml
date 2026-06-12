@@ -41,6 +41,10 @@ spec:
               value: "3001"
             - name: NODE_ENV
               value: production
+            - name: API_BASE_URL
+              value: {{ include "telegram-ai-agent.admin.apiBaseUrl" . | quote }}
+            - name: NEXT_PUBLIC_API_BASE_URL
+              value: {{ include "telegram-ai-agent.admin.publicApiBaseUrl" . | quote }}
           envFrom:
             - secretRef:
                 name: {{ .Values.secret.name }}

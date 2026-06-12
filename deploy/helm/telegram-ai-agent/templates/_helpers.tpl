@@ -123,3 +123,51 @@ ServiceAccount name for backend.
 {{- default "default" .Values.backend.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+API prefix shared by admin dashboard helper defaults.
+*/}}
+{{- define "telegram-ai-agent.apiPrefix" -}}
+{{- default "/api/v1" .Values.config.API_V1_PREFIX -}}
+{{- end -}}
+
+{{/*
+Server-side admin API base URL. Defaults to the release-local backend Service.
+*/}}
+{{- define "telegram-ai-agent.admin.apiBaseUrl" -}}
+{{- $configured := trimSuffix "/" (toString (default "" .Values.admin.apiBaseUrl)) -}}
+{{- if $configured -}}
+{{- $configured -}}
+{{- else -}}
+{{- printf "http://%s:%v%s" (include "telegram-ai-agent.componentName" (dict "ctx" . "name" "backend")) .Values.backend.service.port (include "telegram-ai-agent.apiPrefix" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Browser-visible admin API base URL. Defaults to the public backend ingress host.
+*/}}
+{{- define "telegram-ai-agent.admin.publicApiBaseUrl" -}}
+{{- $configured := trimSuffix "/" (toString (default "" .Values.admin.publicApiBaseUrl)) -}}
+{{- if $configured -}}
+{{- $configured -}}
+{{- else -}}
+{{- $backendHost := "" -}}
+{{- if .Values.ingress.enabled -}}
+{{- range $host := .Values.ingress.hosts -}}
+{{- $servesBackend := false -}}
+{{- range $path := $host.paths -}}
+{{- if eq $path.service "backend" -}}
+{{- $servesBackend = true -}}
+{{- end -}}
+{{- end -}}
+{{- if and $servesBackend (not $backendHost) -}}
+{{- $backendHost = $host.host -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if $backendHost -}}
+{{- $scheme := ternary "https" "http" .Values.ingress.tls.enabled -}}
+{{- printf "%s://%s%s" $scheme $backendHost (include "telegram-ai-agent.apiPrefix" .) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
