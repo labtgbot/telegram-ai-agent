@@ -134,7 +134,7 @@ endpoint:
 | LTV                | `GET /admin/analytics/ltv`                          |
 | Token mix          | `GET /admin/analytics/user-behavior?metric=spend`   |
 
-Aggregates are computed nightly by `app/workers/analytics_snapshot.py`
+Aggregates are computed nightly by `app/workers/daily_analytics.py`
 and cached for fast UI loads. CSV export is available from each chart's
 overflow menu.
 
@@ -309,7 +309,7 @@ materially changes (release-time checklist:
 | Login loops back to `/login`                           | Browser blocking 3rd-party cookies in incognito, or `Admin-Domain` mismatch in chart values.         |
 | "Telegram API error" on Refund                         | Telegram refunds are time-limited (90 days). Bot token revoked? See `docs/DEPLOYMENT.md > Secrets`.  |
 | Pricing edits don't propagate                          | Redis down → cache won't invalidate. `redis-cli ping` from a backend pod.                            |
-| Broadcast stuck at "queued"                            | Worker dyno died; restart `telegram-ai-agent-worker` deployment.                                     |
+| Broadcast stuck at "queued"                            | Check `broadcast-worker` logs and restart the `telegram-ai-agent-broadcast-worker` deployment.        |
 | Sentry shows `redis_set` errors                        | Likely Redis OOM / eviction; check `Monitoring` dashboard, scale Redis.                              |
 
 For incident handling (sev definitions, on-call rotation, paging

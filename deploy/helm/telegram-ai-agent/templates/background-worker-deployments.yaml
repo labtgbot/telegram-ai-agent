@@ -1,0 +1,64 @@
+{{- if .Values.backgroundWorkers.enabled }}
+{{- $ctx := . -}}
+{{- range $name, $worker := .Values.backgroundWorkers.deployments }}
+{{- if $worker.enabled }}
+{{- $component := default (printf "%s-worker" $name) $worker.componentName }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ctx "name" $component) }}
+  labels:
+    {{- include "telegram-ai-agent.componentLabels" (dict "ctx" $ctx "name" $component) | nindent 4 }}
+spec:
+  replicas: {{ default 1 $worker.replicaCount }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "telegram-ai-agent.componentSelectorLabels" (dict "ctx" $ctx "name" $component) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "telegram-ai-agent.componentSelectorLabels" (dict "ctx" $ctx "name" $component) | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $ctx.Template.BasePath "/configmap.yaml") $ctx | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "telegram-ai-agent.backend.serviceAccountName" $ctx }}
+      {{- include "telegram-ai-agent.imagePullSecrets" $ctx | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: {{ $component }}
+          image: {{ include "telegram-ai-agent.image" (dict "ctx" $ctx "component" "backend") }}
+          imagePullPolicy: {{ $ctx.Values.image.pullPolicy }}
+          command:
+            {{- toYaml $worker.command | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ctx "name" "backend-config") }}
+            - secretRef:
+                name: {{ $ctx.Values.secret.name }}
+          {{- with $worker.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml $worker.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}
+{{- end }}
+{{- end }}

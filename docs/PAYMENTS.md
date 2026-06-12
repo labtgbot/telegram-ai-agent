@@ -95,7 +95,9 @@ catches up), the **renewal worker** keeps things consistent:
 python -m app.workers.subscriptions
 ```
 
-Schedule it daily (cron / k8s CronJob / Celery beat in Phase 3).  The
+In Helm deployments it is scheduled daily by the `subscriptions-worker`
+CronJob (`45 0 * * *`). In the production-like Compose fallback,
+`subscriptions-worker` runs the same command in a 24-hour loop. The
 worker:
 
 1. Selects active auto-renew subscriptions where `expires_at <= now()`.

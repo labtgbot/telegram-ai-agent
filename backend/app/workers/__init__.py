@@ -1,16 +1,11 @@
 """Background worker entrypoints.
 
-Phase 2 ships with two tasks:
+Production runs these modules directly from the backend image:
 
-* :func:`run_subscription_renewals` — daily auto-renew sweep
-  (``python -m app.workers.subscriptions``);
-* :func:`run_video_polling_pass` — short-interval video-job poll
-  (``python -m app.workers.video_polling``).
-
-Phase 3 will wire these into Celery beat (see
-``docs/ARCHITECTURE.md > Workers``); for now the functions are directly
-invokable via the corresponding module entrypoints or from an external
-scheduler such as cron.
+* ``python -m app.workers.broadcast --loop`` for broadcast delivery;
+* ``python -m app.workers.video_polling --loop`` for video job polling;
+* Kubernetes CronJobs or compose loops for subscriptions, account deletion,
+  daily analytics, and token usage partition maintenance.
 
 The submodules are exposed lazily via PEP 562 ``__getattr__`` to avoid
 pulling the full ``app.bot`` / ``app.services.payments`` graph at package
@@ -19,11 +14,14 @@ app.workers.<task>``, which triggers this ``__init__`` first, so an
 eager re-export would deadlock on the pre-existing
 ``payments ↔ bot.handlers`` import cycle.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from app.workers.account_deletion import process_due_deletions
+    from app.workers.broadcast import run_broadcast_loop, run_broadcast_pass
     from app.workers.daily_analytics import run_daily_analytics
     from app.workers.subscriptions import run_subscription_renewals
     from app.workers.token_usage_partitions import (
@@ -35,6 +33,9 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "process_due_deletions",
+    "run_broadcast_loop",
+    "run_broadcast_pass",
     "run_daily_analytics",
     "run_subscription_renewals",
     "run_token_usage_partition_maintenance",
@@ -43,8 +44,14 @@ __all__ = [
 ]
 
 _LAZY: dict[str, tuple[str, str]] = {
+    "process_due_deletions": ("app.workers.account_deletion", "process_due_deletions"),
+    "run_broadcast_loop": ("app.workers.broadcast", "run_broadcast_loop"),
+    "run_broadcast_pass": ("app.workers.broadcast", "run_broadcast_pass"),
     "run_daily_analytics": ("app.workers.daily_analytics", "run_daily_analytics"),
-    "run_subscription_renewals": ("app.workers.subscriptions", "run_subscription_renewals"),
+    "run_subscription_renewals": (
+        "app.workers.subscriptions",
+        "run_subscription_renewals",
+    ),
     "run_token_usage_partition_maintenance": (
         "app.workers.token_usage_partitions",
         "run_token_usage_partition_maintenance",

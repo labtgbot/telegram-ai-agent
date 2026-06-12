@@ -93,6 +93,13 @@ jobs:
             --values deploy/helm/telegram-ai-agent/values-production.yaml \
             --rendered /tmp/prod.yaml
 
+      - name: Validate background worker manifests
+        run: |
+          python3 deploy/helm/telegram-ai-agent/tests/validate_worker_contract.py \
+            --repo-root . \
+            --rendered /tmp/staging.yaml \
+            --rendered /tmp/prod.yaml
+
       - name: Helm template (rollouts / canary) renders cleanly
         run: |
           helm template telegram-ai-agent deploy/helm/telegram-ai-agent \

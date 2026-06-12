@@ -198,7 +198,7 @@ Triggered by `NoPaymentEventsForOneHour`.
 
 1. Verify the Telegram Stars webhook receives traffic
    (`tgai_business_payment_events_total{event="invoice_created"}`).
-2. Check the payments worker logs in Loki:
+2. Check the subscription renewal worker logs in Loki:
    `{app="telegram-ai-agent", logger=~"app.services.payments.*"}`.
-3. If the webhook is firing but the worker is silent, restart the worker
-   deployment.
+3. If the webhook is firing but the worker is silent, inspect the
+   `subscriptions-worker` CronJob history and trigger a manual run.

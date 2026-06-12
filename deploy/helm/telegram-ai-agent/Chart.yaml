@@ -2,9 +2,9 @@ apiVersion: v2
 name: telegram-ai-agent
 description: |
   Helm chart for the Telegram AI Agent platform: FastAPI backend (REST + bot
-  webhook), React Mini App, Next.js admin dashboard, plus optional Celery
-  workers. Pulls images from ghcr.io/labtgbot/telegram-ai-agent/{backend,mini-app,admin}
-  and wires them together with an Ingress, HPA, ServiceAccounts and probes.
+  webhook), Python background workers, React Mini App, and Next.js admin
+  dashboard. Pulls images from ghcr.io/labtgbot/telegram-ai-agent/{backend,mini-app,admin}
+  and wires them together with an Ingress, HPA, CronJobs, ServiceAccounts and probes.
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

@@ -15,6 +15,39 @@
 #   docker compose -f docker/compose.prod.yml --env-file .env.prod up -d
 #   docker compose -f docker/compose.prod.yml exec backend alembic upgrade head
 
+x-backend-worker-base: &backend-worker-base
+  image: ${BACKEND_IMAGE:?BACKEND_IMAGE must be set to an immutable release tag or digest}
+  restart: unless-stopped
+  user: "1000:1000"
+  read_only: true
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  env_file:
+    - ../.env.prod
+  environment:
+    APP_ENV: production
+    APP_DEBUG: "false"
+    LOG_LEVEL: INFO
+    LOG_FORMAT: json
+    DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD}@postgres:5432/telegram_ai_agent
+    REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env.prod}@redis:6379/0
+    COMPOSIO_MODE: real
+    COMPOSIO_API_KEY: ${COMPOSIO_API_KEY:?COMPOSIO_API_KEY must be set in .env.prod}
+  tmpfs:
+    - /tmp:uid=1000,gid=1000,mode=1777
+  deploy:
+    resources:
+      limits:
+        cpus: "0.75"
+        memory: 512M
+
 services:
   caddy:
     image: caddy:2.8-alpine
@@ -106,6 +139,70 @@ services:
       - --port=8000
       - --workers=4
       - --no-access-log
+
+  broadcast-worker:
+    <<: *backend-worker-base
+    container_name: tgai-broadcast-worker
+    command:
+      - python
+      - -m
+      - app.workers.broadcast
+      - --loop
+
+  video-polling-worker:
+    <<: *backend-worker-base
+    container_name: tgai-video-polling-worker
+    command:
+      - python
+      - -m
+      - app.workers.video_polling
+      - --loop
+      - --interval-s
+      - "10"
+
+  subscriptions-worker:
+    <<: *backend-worker-base
+    container_name: tgai-subscriptions-worker
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          python -m app.workers.subscriptions
+          sleep "$${SUBSCRIPTION_RENEWAL_INTERVAL_SECONDS:-86400}"
+        done
+
+  account-deletion-worker:
+    <<: *backend-worker-base
+    container_name: tgai-account-deletion-worker
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          python -m app.workers.account_deletion
+          sleep "$${ACCOUNT_DELETION_INTERVAL_SECONDS:-86400}"
+        done
+
+  daily-analytics-worker:
+    <<: *backend-worker-base
+    container_name: tgai-daily-analytics-worker
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          python -m app.workers.daily_analytics
+          sleep "$${DAILY_ANALYTICS_INTERVAL_SECONDS:-86400}"
+        done
+
+  token-usage-partitions-worker:
+    <<: *backend-worker-base
+    container_name: tgai-token-usage-partitions-worker
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          python -m app.workers.token_usage_partitions --months-ahead "$${TOKEN_USAGE_PARTITIONS_MONTHS_AHEAD:-6}"
+          sleep "$${TOKEN_USAGE_PARTITIONS_INTERVAL_SECONDS:-86400}"
+        done
 
   mini-app:
     image: ${MINI_APP_IMAGE:?MINI_APP_IMAGE must be set to an immutable release tag or digest}

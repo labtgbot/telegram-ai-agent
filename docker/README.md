@@ -40,6 +40,16 @@ secrets are missing. Set explicit `BACKEND_IMAGE`, `MINI_APP_IMAGE`,
 `ADMIN_IMAGE`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `COMPOSIO_API_KEY`,
 `CADDY_DATA_DIR`, and `CADDY_CONFIG_DIR` in `.env.prod`.
 
+The production-like stack starts the backend API plus background worker
+services from the same backend image:
+
+- `broadcast-worker`: `python -m app.workers.broadcast --loop`
+- `video-polling-worker`: `python -m app.workers.video_polling --loop --interval-s 10`
+- `subscriptions-worker`: daily renewal loop
+- `account-deletion-worker`: daily GDPR anonymisation loop
+- `daily-analytics-worker`: daily analytics snapshot loop
+- `token-usage-partitions-worker`: token usage partition maintenance loop
+
 The Caddy directories must be writable by UID/GID `65534` because the
 production-like stack runs Caddy as a non-root user:
 
