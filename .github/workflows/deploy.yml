@@ -197,6 +197,8 @@ jobs:
           BACKEND_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/backend:0.0.0-ci
           MINI_APP_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/mini-app:0.0.0-ci
           ADMIN_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/admin:0.0.0-ci
+          API_BASE_URL: http://backend:8000/api/v1
+          NEXT_PUBLIC_API_BASE_URL: https://bot.example.com/api/v1
         run: |
           touch .env.prod
           docker compose -f docker/compose.prod.yml --env-file .env.prod config > /tmp/compose.prod.json
@@ -240,6 +242,8 @@ jobs:
           BACKEND_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/backend:0.0.0-ci
           MINI_APP_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/mini-app:0.0.0-ci
           ADMIN_IMAGE: ghcr.io/labtgbot/telegram-ai-agent/admin:0.0.0-ci
+          API_BASE_URL: http://backend:8000/api/v1
+          NEXT_PUBLIC_API_BASE_URL: https://bot.example.com/api/v1
           BACKUP_S3_BUCKET: ci-bucket
           BACKUP_S3_REGION: eu-central-1
           AWS_ACCESS_KEY_ID: ci

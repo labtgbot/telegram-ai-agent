@@ -276,6 +276,13 @@ miniApp:
 # -----------------------------------------------------------------------------
 admin:
   enabled: true
+  # Server-side API URL used by Next.js route handlers. Empty value defaults
+  # to the release-local backend Service, e.g.
+  # http://telegram-ai-agent-backend:8000/api/v1.
+  apiBaseUrl: ""
+  # Browser-visible API URL used by NEXT_PUBLIC_API_BASE_URL. Empty value
+  # defaults to the backend ingress host plus config.API_V1_PREFIX.
+  publicApiBaseUrl: ""
   image:
     repository: admin
     tag: ""
