@@ -310,10 +310,19 @@ Issues `refundStarPayment` upstream + inserts a compensating row in
 
 | Method | Path                          | Purpose                                                 |
 |--------|-------------------------------|---------------------------------------------------------|
-| `POST` | `/compliance/age-verify`      | One-shot age confirmation; sets `users.age_verified`.   |
+| `GET` | `/user/me/age-verification`   | Feature-flagged age-gate status for the caller. When the current stub is enabled, it returns `verified=false` and `verified_at=null`. |
+| `POST` | `/user/me/age-verification`  | Submit an age proof to the feature-flagged stub. Development `self_declared` accepts `{"confirmed_18_plus": true}` and returns a one-shot success response, but does not persist `age_verified_at`; later `GET` calls still report an unverified state. |
 | `GET` | `/user/me/export`             | JSON export of the caller's account data.               |
 | `DELETE` | `/user/me`                  | Schedules account deletion with a 30-day grace period.  |
 | `POST` | `/user/me/cancel-deletion`   | Cancels a pending deletion within the grace window.     |
+
+Age verification is exposed under the base URL above, so the full endpoint is
+`/api/v1/user/me/age-verification`. With `COMPLIANCE_AGE_GATE_ENABLED=false`,
+both methods return `404 age_verification_disabled`. Providers without an
+implemented backend integration return `501
+age_verification_provider_not_integrated`; `self_declared` is development-only
+and returns `403 age_verification_self_declared_not_allowed` outside dev/local
+environments.
 
 Public legal text is served as Markdown by the app shell:
 `GET /privacy`, `GET /terms` (not under `/api/v1`).
