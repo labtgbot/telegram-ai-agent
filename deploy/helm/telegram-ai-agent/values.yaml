@@ -65,6 +65,7 @@ config:
   TRUSTED_PROXY_IPS: ""
   TELEGRAM_API_BASE_URL: https://api.telegram.org
   TELEGRAM_SET_COMMANDS_ON_STARTUP: "true"
+  COMPOSIO_MODE: real
   COMPOSIO_BASE_URL: https://backend.composio.dev
   PAYMENT_CURRENCY: XTR
 

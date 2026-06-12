@@ -49,8 +49,13 @@ spec:
                 name: {{ include "telegram-ai-agent.componentName" (dict "ctx" . "name" "backend-config") }}
             - secretRef:
                 name: {{ .Values.secret.name }}
-          {{- with .Values.backend.extraEnv }}
           env:
+            - name: COMPOSIO_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secret.name }}
+                  key: COMPOSIO_API_KEY
+          {{- with .Values.backend.extraEnv }}
             {{- toYaml . | nindent 12 }}
           {{- end }}
           livenessProbe:

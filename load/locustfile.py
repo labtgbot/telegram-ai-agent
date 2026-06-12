@@ -1,10 +1,9 @@
 """Locust load test for ``POST /api/v1/generate/text``.
 
 This scenario targets the text-generation endpoint with the Composio
-**mock** client active (`COMPOSIO_API_KEY` unset on the server), so it
-exercises the FastAPI routing, auth, rate-limiting, SQL transactions and
-the in-process generation pipeline — but never reaches an external AI
-provider.
+**mock** client active (`COMPOSIO_MODE=mock` on the server), so it exercises
+the FastAPI routing, auth, rate-limiting, SQL transactions and the in-process
+generation pipeline — but never reaches an external AI provider.
 
 Acceptance target (issue #30, Phase 3 "Load"):
 

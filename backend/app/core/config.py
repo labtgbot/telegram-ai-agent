@@ -12,6 +12,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_ADMIN_JWT_SECRET = "change-me"  # noqa: S105 — sentinel, not a real secret
 DEFAULT_APP_SECRET = "change-me"  # noqa: S105 — sentinel, not a real secret
+NON_PRODUCTION_ENVS = frozenset({"development", "dev", "local", "test", "ci"})
+COMPOSIO_MODE_REAL = "real"
+COMPOSIO_MODE_MOCK = "mock"
+COMPOSIO_MODES = frozenset({COMPOSIO_MODE_REAL, COMPOSIO_MODE_MOCK})
 
 
 class InsecureDefaultSecretError(RuntimeError):
@@ -188,9 +192,16 @@ class Settings(BaseSettings):
         ),
     )
 
+    composio_mode: str = Field(
+        default=COMPOSIO_MODE_REAL,
+        description=(
+            "Composio client mode: 'real' requires COMPOSIO_API_KEY; "
+            "'mock' is only allowed in non-production environments."
+        ),
+    )
     composio_api_key: str = Field(
         default="",
-        description="Composio API key — when empty the mock client is used.",
+        description="Composio API key required when COMPOSIO_MODE=real.",
     )
     composio_default_user_id: str = Field(
         default="",
@@ -310,9 +321,23 @@ class Settings(BaseSettings):
         return self.app_env.lower() in {"development", "dev", "local"}
 
     @property
+    def is_non_production(self) -> bool:
+        return self.app_env.lower() in NON_PRODUCTION_ENVS
+
+    @property
+    def composio_mode_normalized(self) -> str:
+        return (self.composio_mode or "").strip().lower()
+
+    @property
+    def composio_mock_enabled(self) -> bool:
+        return self.composio_mode_normalized == COMPOSIO_MODE_MOCK
+
+    @property
     def composio_enabled(self) -> bool:
-        """Whether to use the real Composio client (vs. mock)."""
-        return bool(self.composio_api_key and self.composio_api_key.strip())
+        """Whether to use the real Composio client."""
+        return self.composio_mode_normalized == COMPOSIO_MODE_REAL and bool(
+            self.composio_api_key and self.composio_api_key.strip()
+        )
 
     @property
     def composio_toolkits(self) -> tuple[str, ...]:
@@ -345,25 +370,40 @@ class Settings(BaseSettings):
         return tuple(out) if out else (10,)
 
     def assert_production_safe(self) -> None:
-        """Fail loudly when a placeholder secret leaks into a real environment.
+        """Fail loudly when unsafe settings leak into a real environment.
 
         Called from the app lifespan. In development (``APP_ENV`` in
         ``{development, dev, local, test, ci}``) placeholders are tolerated
         so contributors can run ``uvicorn --reload`` without touching env
-        files. Outside that, ``InsecureDefaultSecretError`` is raised before
-        the API starts serving — this is the safety net required by
-        ``docs/security/audit-report.md`` finding F-001.
+        files. Outside that, required secrets and provider credentials are
+        validated before the API starts serving.
         """
-        if self.app_env.lower() in {"development", "dev", "local", "test", "ci"}:
-            return
+        env = self.app_env.lower()
+        mode = self.composio_mode_normalized
         offenders: list[str] = []
+
+        if mode not in COMPOSIO_MODES:
+            offenders.append("COMPOSIO_MODE")
+        if mode == COMPOSIO_MODE_MOCK and env not in NON_PRODUCTION_ENVS:
+            offenders.append("COMPOSIO_MODE=mock")
+
+        if env in NON_PRODUCTION_ENVS:
+            if offenders:
+                raise InsecureDefaultSecretError(
+                    "Refusing to start with unsafe configuration in "
+                    f"app_env={self.app_env!r}: {', '.join(offenders)}. "
+                    "Use COMPOSIO_MODE=real or an explicit non-production mock mode."
+                )
+            return
         if (self.admin_jwt_secret or "").strip() in {"", DEFAULT_ADMIN_JWT_SECRET}:
             offenders.append("ADMIN_JWT_SECRET")
         if not (self.telegram_webhook_secret or "").strip():
             offenders.append("TELEGRAM_WEBHOOK_SECRET")
+        if not (self.composio_api_key or "").strip():
+            offenders.append("COMPOSIO_API_KEY")
         if offenders:
             raise InsecureDefaultSecretError(
-                "Refusing to start with placeholder secret(s) in "
+                "Refusing to start with unsafe production setting(s) in "
                 f"app_env={self.app_env!r}: {', '.join(offenders)}. "
                 "Override the value(s) via environment / sealed secret."
             )

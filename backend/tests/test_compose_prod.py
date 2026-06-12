@@ -23,6 +23,7 @@ COMPOSE_ENV_KEYS = {
     "BACKEND_IMAGE",
     "CADDY_CONFIG_DIR",
     "CADDY_DATA_DIR",
+    "COMPOSIO_API_KEY",
     "DOMAIN",
     "GF_SECURITY_ADMIN_PASSWORD",
     "GF_SECURITY_ADMIN_USER",
@@ -39,6 +40,7 @@ VALID_ENV = {
     "CADDY_CONFIG_DIR": "/srv/tgai/caddy/config",
     "POSTGRES_PASSWORD": "postgres-prod-password",
     "REDIS_PASSWORD": "redis-prod-password",
+    "COMPOSIO_API_KEY": "composio-prod-key",
     "BACKEND_IMAGE": "ghcr.io/labtgbot/telegram-ai-agent/backend:0.1.0",
     "MINI_APP_IMAGE": "ghcr.io/labtgbot/telegram-ai-agent/mini-app:0.1.0",
     "ADMIN_IMAGE": "ghcr.io/labtgbot/telegram-ai-agent/admin:0.1.0",
@@ -149,6 +151,18 @@ def test_prod_compose_requires_explicit_release_images(tmp_path: Path) -> None:
     )
 
 
+def test_prod_compose_requires_composio_api_key(tmp_path: Path) -> None:
+    _require_docker_compose()
+    env_without_composio_key = {
+        key: value for key, value in VALID_ENV.items() if key != "COMPOSIO_API_KEY"
+    }
+
+    result = _run_compose_config(tmp_path, env_without_composio_key)
+
+    assert result.returncode != 0
+    assert "COMPOSIO_API_KEY" in result.stderr
+
+
 def test_prod_compose_hardening_contract(tmp_path: Path) -> None:
     _require_docker_compose()
 
@@ -198,6 +212,8 @@ def test_prod_compose_hardening_contract(tmp_path: Path) -> None:
     assert services["backend"]["environment"]["REDIS_URL"] == (
         "redis://:redis-prod-password@redis:6379/0"
     )
+    assert services["backend"]["environment"]["COMPOSIO_MODE"] == "real"
+    assert services["backend"]["environment"]["COMPOSIO_API_KEY"] == "composio-prod-key"
 
     caddy = services["caddy"]
     assert caddy["entrypoint"] == ["/bin/sh", "-c"]

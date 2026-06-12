@@ -149,6 +149,7 @@ def build_app(monkeypatch, store, fake_redis, captured_requests, settings):
     from app.main import create_app
     from app.services import bot_users as bot_users_service
     from app.services import users as users_module
+    from app.services.composio import MockComposioClient
 
     # --- DB stubs --------------------------------------------------------
 
@@ -241,12 +242,14 @@ def build_app(monkeypatch, store, fake_redis, captured_requests, settings):
     app = create_app()
 
     # FastAPI resolves these via Depends() at request time; override after creation.
+    from app.api.v1.generate import get_composio_client as real_get_composio_client
     from app.auth.dependencies import _settings_dep
     from app.core.database import get_session as real_get_session
 
     app.dependency_overrides[real_get_session] = fake_get_session
     app.dependency_overrides[_settings_dep] = lambda: settings
     app.dependency_overrides[original_get_bot_client] = lambda: fake_client
+    app.dependency_overrides[real_get_composio_client] = lambda: MockComposioClient()
     app.dependency_overrides[bot_route._redis_dep] = lambda: fake_redis
 
     yield app, store, captured_requests

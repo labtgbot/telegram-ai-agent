@@ -65,6 +65,8 @@ make seed       # python -m scripts.seed
 | `API_V1_PREFIX` | Префикс v1 API (по умолчанию `/api/v1`). |
 | `HEALTH_CHECK_TIMEOUT` | Per-dep таймаут (сек) для `/health`. |
 | `TRUSTED_PROXY_IPS` | Comma-separated IP/CIDR allowlist of reverse proxies whose `X-Forwarded-For` headers are trusted. Empty means XFF is ignored. |
+| `COMPOSIO_MODE` | `real` для настоящего Composio; `mock` только для dev/test/ci/local. |
+| `COMPOSIO_API_KEY` | Обязателен при `COMPOSIO_MODE=real`; пустой ключ больше не включает mock. |
 
 ## Структурированное логирование
 

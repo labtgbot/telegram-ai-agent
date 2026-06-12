@@ -380,8 +380,11 @@ async def test_mock_client_aclose_marks_closed() -> None:
 # ------------------------------------------------------------- build_client
 
 
-def test_build_client_returns_mock_when_api_key_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_client_returns_mock_in_explicit_mock_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
+    monkeypatch.setenv("COMPOSIO_MODE", "mock")
     monkeypatch.setenv("COMPOSIO_API_KEY", "")
 
     import importlib
@@ -394,10 +397,43 @@ def test_build_client_returns_mock_when_api_key_missing(monkeypatch: pytest.Monk
     assert isinstance(client, MockComposioClient)
 
 
+def test_build_client_rejects_missing_api_key_in_real_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COMPOSIO_MODE", "real")
+    monkeypatch.setenv("COMPOSIO_API_KEY", "")
+
+    import importlib
+
+    import app.core.config as config_module
+
+    importlib.reload(config_module)
+    config_module.get_settings.cache_clear()
+
+    with pytest.raises(ComposioAuthError) as excinfo:
+        build_client(config_module.get_settings())
+    assert "COMPOSIO_API_KEY" in str(excinfo.value)
+
+
+def test_build_client_rejects_mock_mode_outside_dev() -> None:
+    from app.core import config as config_module
+
+    settings = config_module.Settings(
+        app_env="production",
+        composio_mode="mock",
+        composio_api_key="real-key-present",
+    )
+
+    with pytest.raises(ComposioAuthError) as excinfo:
+        build_client(settings)
+    assert "COMPOSIO_MODE=mock" in str(excinfo.value)
+
+
 @pytest.mark.asyncio
 async def test_build_client_returns_http_when_api_key_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("COMPOSIO_MODE", "real")
     monkeypatch.setenv("COMPOSIO_API_KEY", "secret")
     monkeypatch.setenv("COMPOSIO_DEFAULT_USER_ID", "user-1")
 

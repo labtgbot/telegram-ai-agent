@@ -5,8 +5,8 @@ two implementations:
 
 * :class:`HttpComposioClient` — talks to the Composio MCP REST API over
   ``httpx``;
-* :class:`MockComposioClient` — in-memory client used by tests and when
-  ``COMPOSIO_API_KEY`` is empty.
+* :class:`MockComposioClient` — in-memory client used by tests and by
+  explicit non-production ``COMPOSIO_MODE=mock`` runs.
 
 See ``docs/architecture/adr/0002-composio-mcp-vs-direct-sdk.md`` for the
 why and ``backend/tests/test_composio_client.py`` for behavioural
