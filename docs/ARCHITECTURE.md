@@ -45,8 +45,8 @@ graph TB
 |-----------|-------|---------|---------------|
 | Backend API + Bot | FastAPI + aiogram 3 (Python 3.11+) | Telegram webhook, REST API, бизнес-логика | [ADR-0001](./architecture/adr/0001-fastapi-vs-aiogram-only.md) |
 | Database | PostgreSQL 15+ | Пользователи, транзакции, аналитика | [ADR-0005](./architecture/adr/0005-database-migrations.md) |
-| Cache / Queue | Redis 7+ | Сессии, rate limit, celery broker | [ADR-0004](./architecture/adr/0004-rate-limiting.md) |
-| Task Queue | Celery | Платёжные обработки, рассылки, фоновые задачи | — |
+| Cache | Redis 7+ | Сессии, rate limit, короткоживущие кэши | [ADR-0004](./architecture/adr/0004-rate-limiting.md) |
+| Background Workers | Python worker entrypoints | Рассылки, продление подписок, GDPR deletion, аналитика, polling видео | — |
 | Mini App | React + Telegram WebApp SDK | UI для пользователей внутри Telegram | [ADR-0003](./architecture/adr/0003-authentication-scheme.md) |
 | Admin CRM | Next.js 14 + TypeScript | Управление проектом для администраторов | [ADR-0003](./architecture/adr/0003-authentication-scheme.md) |
 | AI Provider | Composio MCP → Gemini / Claude / GPT | Генерация контента и текстовые запросы | [ADR-0002](./architecture/adr/0002-composio-mcp-vs-direct-sdk.md) |
@@ -159,17 +159,18 @@ sequenceDiagram
 ## Scalability
 
 - Горизонтальное масштабирование backend через stateless API (2+ реплики, HPA по RPS).
-- Celery worker'ы на отдельных подах, HPA по длине очереди.
+- Background workers запускаются отдельно от API: `broadcast` и `video-polling`
+  как one-replica Deployments, ежедневные задачи как Kubernetes CronJobs.
 - Redis HA (master + replica), отдельный namespace.
 - PostgreSQL: read-replica для аналитики CRM, партиционирование `token_usage_logs` по дате ([DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md)).
 - Миграции без downtime ([ADR-0005](./architecture/adr/0005-database-migrations.md)).
 
 ## Observability
 
-- **Метрики**: Prometheus scrape `/metrics` от backend (FastAPI + aiogram middleware) и Celery.
-- **Дашборды**: Grafana — RPS, latency p50/p95/p99, ошибки 4xx/5xx, длина очереди Celery, balance операций.
+- **Метрики**: Prometheus scrape `/metrics` от backend (FastAPI + aiogram middleware), Kubernetes status для worker Deployments/CronJobs.
+- **Дашборды**: Grafana — RPS, latency p50/p95/p99, ошибки 4xx/5xx, worker failures, balance операций.
 - **Ошибки**: Sentry для backend и Mini App.
-- **Алерты**: 5xx > 1%, p95 > 1с, длина очереди > 1000, неудачные логины > 10/час.
+- **Алерты**: 5xx > 1%, p95 > 1с, failed CronJobs, crash-loop worker Deployments, неудачные логины > 10/час.
 
 ## Внешние документы
 

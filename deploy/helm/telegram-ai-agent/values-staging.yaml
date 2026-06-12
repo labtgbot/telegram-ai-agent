@@ -64,8 +64,8 @@ admin:
       cpu: 250m
       memory: 256Mi
 
-worker:
-  enabled: false
+backgroundWorkers:
+  enabled: true
 
 # Staging exercises the backup pipeline daily so we notice broken jobs before
 # they bite production. Retention is shorter and verify only runs monthly.

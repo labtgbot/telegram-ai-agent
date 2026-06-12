@@ -59,21 +59,52 @@ backend:
       cpu: 2000m
       memory: 1Gi
 
-worker:
-  enabled: false  # Phase 4 follow-up — turn on once celery image ships.
-  replicaCount: 2
-  autoscaling:
-    enabled: true
-    minReplicas: 2
-    maxReplicas: 6
-    targetCPUUtilizationPercentage: 70
-  resources:
-    requests:
-      cpu: 300m
-      memory: 384Mi
-    limits:
-      cpu: 1500m
-      memory: 1Gi
+backgroundWorkers:
+  enabled: true
+  deployments:
+    broadcast:
+      replicaCount: 1
+      resources:
+        requests:
+          cpu: 150m
+          memory: 192Mi
+        limits:
+          cpu: 750m
+          memory: 512Mi
+    video-polling:
+      replicaCount: 1
+      resources:
+        requests:
+          cpu: 150m
+          memory: 192Mi
+        limits:
+          cpu: 750m
+          memory: 512Mi
+  cronJobs:
+    subscriptions:
+      resources:
+        requests:
+          cpu: 75m
+          memory: 128Mi
+        limits:
+          cpu: 350m
+          memory: 384Mi
+    account-deletion:
+      resources:
+        requests:
+          cpu: 75m
+          memory: 128Mi
+        limits:
+          cpu: 350m
+          memory: 384Mi
+    daily-analytics:
+      resources:
+        requests:
+          cpu: 75m
+          memory: 128Mi
+        limits:
+          cpu: 350m
+          memory: 384Mi
 
 miniApp:
   replicaCount: 3

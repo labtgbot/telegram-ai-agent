@@ -15,8 +15,10 @@ The work itself lives in :class:`app.services.video_generation.VideoGenerationSe
 — this module is a thin entrypoint that owns the database session and
 the ``ComposioClient`` lifecycle.
 """
+
 from __future__ import annotations
 
+import argparse
 import asyncio
 from typing import TYPE_CHECKING
 
@@ -114,13 +116,49 @@ async def run_video_polling_loop(
             logger.debug("video.poll.client_close_failed", exc_info=True)
 
 
-def main() -> int:
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="python -m app.workers.video_polling",
+        description="Poll non-terminal video generation jobs.",
+    )
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        help="Run continuously instead of performing one polling pass.",
+    )
+    parser.add_argument(
+        "--interval-s",
+        type=float,
+        default=10.0,
+        help="Seconds between polling passes in --loop mode.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=100,
+        help="Maximum active jobs to poll per pass.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
     """CLI entrypoint: ``python -m app.workers.video_polling``.
 
     Exits 0 on success, 1 if the pass raised — what cron/k8s use to retry.
     """
+    args = _parse_args(argv)
     try:
-        results = asyncio.run(run_video_polling_pass())
+        if args.loop:
+            asyncio.run(
+                run_video_polling_loop(
+                    interval_s=args.interval_s,
+                    limit=args.limit,
+                )
+            )
+            return 0
+        results = asyncio.run(run_video_polling_pass(limit=args.limit))
+    except KeyboardInterrupt:
+        return 0
     except Exception:  # noqa: BLE001 — already logged above
         return 1
     print(f"video_jobs_polled={len(results)}")  # noqa: T201 — CLI output

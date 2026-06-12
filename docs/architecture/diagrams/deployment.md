@@ -23,9 +23,9 @@ flowchart TB
             API1[backend-api pod #1]
             API2[backend-api pod #2]
             BOT[bot-webhook pod]
-            W1[celery-worker pod #1]
-            W2[celery-worker pod #2]
-            BEAT[celery-beat pod]
+            BW[broadcast-worker deployment]
+            VW[video-polling-worker deployment]
+            CRON[worker CronJobs]
             MINI[mini-app static pod]
             CRM[admin-crm pod]
         end
@@ -58,21 +58,21 @@ flowchart TB
     API1 --> PG
     API2 --> PG
     BOT --> PG
-    W1 --> PG
-    W2 --> PG
-    BEAT --> REDIS
+    BW --> PG
+    VW --> PG
+    CRON --> PG
 
     API1 --> REDIS
     API2 --> REDIS
     BOT --> REDIS
-    W1 --> REDIS
-    W2 --> REDIS
+    BW --> REDIS
+    VW --> REDIS
 
     PG -. async replication .-> PG_R
     REDIS -. replication .-> REDIS_R
 
     API1 -.metrics.-> PROM
-    W1 -.metrics.-> PROM
+    BW -.logs/status.-> PROM
     PROM --> GRAF
     API1 -.errors.-> SENTRY
 ```
@@ -97,10 +97,11 @@ flowchart TB
 ## Бэкапы
 
 - PostgreSQL: ежедневный логический + WAL archive (PITR 7 дней).
-- Redis: не критичен (кэш + очередь), но snapshot раз в час.
+- Redis: не критичен (кэш + rate-limit state), но snapshot раз в час.
 
 ## Масштабирование
 
 - `backend-api`: HPA по CPU + кастомной метрике `requests_per_second`.
-- `celery-worker`: HPA по длине очереди в Redis (`celery_queue_length`).
+- `broadcast-worker` и `video-polling-worker`: отдельные one-replica
+  Deployments; ежедневные jobs масштабируются расписанием CronJob.
 - PostgreSQL: вертикально + read-replica для аналитики CRM.

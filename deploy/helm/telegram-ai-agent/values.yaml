@@ -137,27 +137,95 @@ backend:
   extraEnv: []
 
 # -----------------------------------------------------------------------------
-# Celery worker (optional; off until image is built — Phase 4 follow-up).
+# Background workers.
+#
+# Long-running workers are rendered as Deployments. Daily/batch maintenance runs
+# as Kubernetes CronJobs. Every command targets an existing Python module in
+# backend/app/workers and uses the backend image.
 # -----------------------------------------------------------------------------
-worker:
-  enabled: false
-  image:
-    repository: backend
-    tag: ""
-  replicaCount: 1
-  command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=INFO"]
-  resources:
-    requests:
-      cpu: 200m
-      memory: 256Mi
-    limits:
-      cpu: 1000m
-      memory: 512Mi
-  autoscaling:
-    enabled: false
-    minReplicas: 1
-    maxReplicas: 4
-    targetCPUUtilizationPercentage: 70
+backgroundWorkers:
+  enabled: true
+  deployments:
+    broadcast:
+      enabled: true
+      componentName: broadcast-worker
+      replicaCount: 1
+      command: ["python", "-m", "app.workers.broadcast", "--loop"]
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 384Mi
+    video-polling:
+      enabled: true
+      componentName: video-polling-worker
+      replicaCount: 1
+      command:
+        ["python", "-m", "app.workers.video_polling", "--loop", "--interval-s", "10"]
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 500m
+          memory: 384Mi
+  cronJobs:
+    subscriptions:
+      enabled: true
+      componentName: subscriptions-worker
+      schedule: "45 0 * * *"
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      startingDeadlineSeconds: 21600
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      command: ["python", "-m", "app.workers.subscriptions"]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 96Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+    account-deletion:
+      enabled: true
+      componentName: account-deletion-worker
+      schedule: "30 0 * * *"
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      startingDeadlineSeconds: 21600
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      command: ["python", "-m", "app.workers.account_deletion"]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 96Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+    daily-analytics:
+      enabled: true
+      componentName: daily-analytics-worker
+      schedule: "10 1 * * *"
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      startingDeadlineSeconds: 21600
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      command: ["python", "-m", "app.workers.daily_analytics"]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 96Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
 
 # -----------------------------------------------------------------------------
 # token_usage_logs partition maintenance.

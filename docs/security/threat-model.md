@@ -30,7 +30,7 @@ of service, Elevation of privilege) и текущие меры смягчени�
 | 5 | Admin Dashboard | Next.js 14 (App Router) | `admin-dashboard/` |
 | 6 | Payments | Telegram Stars (`XTR`) | `backend/app/services/payments.py` |
 | 7 | Composio MCP | внешние LLM-провайдеры (Gemini, Claude, GPT) | `backend/app/services/composio/*` |
-| 8 | Async workers | Celery-like background jobs | `backend/app/workers/*` |
+| 8 | Async workers | Python background jobs via Kubernetes Deployments/CronJobs | `backend/app/workers/*` |
 | 9 | Data plane | PostgreSQL 15, Redis 7 | `deploy/helm/*` |
 | 10 | Build & release | GitHub Actions, GHCR, Helm + Argo Rollouts | `.github/workflows/*`, `deploy/*` |
 

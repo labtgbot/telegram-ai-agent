@@ -228,6 +228,11 @@ curl -fsSI https://admin.telegram-ai-agent.example.com/login \
 curl -fsS \
   "https://api.telegram.org/bot$BOT_TOKEN/getWebhookInfo" \
   | jq '.result.url, .result.has_custom_certificate, .result.pending_update_count'
+
+# 5.5 Background workers are scheduled/running
+kubectl -n tgai-prod get deploy -l app.kubernetes.io/component=broadcast-worker
+kubectl -n tgai-prod get deploy -l app.kubernetes.io/component=video-polling-worker
+kubectl -n tgai-prod get cronjob -l app.kubernetes.io/part-of=telegram-ai-agent
 ```
 
 Expected output:
@@ -236,6 +241,9 @@ Expected output:
 - Webhook URL points at
   `https://api.telegram-ai-agent.example.com/api/v1/bot/webhook`.
 - `pending_update_count` is `0` after the smoke transaction.
+- `broadcast-worker` and `video-polling-worker` have one ready replica.
+- CronJobs exist for `subscriptions-worker`, `account-deletion-worker`,
+  `daily-analytics-worker`, and `token-usage-partitions`.
 
 Then verify Grafana:
 

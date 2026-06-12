@@ -1,0 +1,72 @@
+{{- if .Values.backgroundWorkers.enabled }}
+{{- $ctx := . -}}
+{{- range $name, $job := .Values.backgroundWorkers.cronJobs }}
+{{- if $job.enabled }}
+{{- $component := default (printf "%s-worker" $name) $job.componentName }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ctx "name" $component) }}
+  labels:
+    {{- include "telegram-ai-agent.componentLabels" (dict "ctx" $ctx "name" $component) | nindent 4 }}
+spec:
+  schedule: {{ $job.schedule | quote }}
+  concurrencyPolicy: {{ default "Forbid" $job.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ default 3 $job.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ default 3 $job.failedJobsHistoryLimit }}
+  startingDeadlineSeconds: {{ default 21600 $job.startingDeadlineSeconds }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ default 2 $job.backoffLimit }}
+      ttlSecondsAfterFinished: {{ default 86400 $job.ttlSecondsAfterFinished }}
+      {{- with $job.activeDeadlineSeconds }}
+      activeDeadlineSeconds: {{ . }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            {{- include "telegram-ai-agent.componentSelectorLabels" (dict "ctx" $ctx "name" $component) | nindent 12 }}
+          annotations:
+            checksum/config: {{ include (print $ctx.Template.BasePath "/configmap.yaml") $ctx | sha256sum }}
+        spec:
+          serviceAccountName: {{ include "telegram-ai-agent.backend.serviceAccountName" $ctx }}
+          {{- include "telegram-ai-agent.imagePullSecrets" $ctx | nindent 10 }}
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: {{ $component }}
+              image: {{ include "telegram-ai-agent.image" (dict "ctx" $ctx "component" "backend") }}
+              imagePullPolicy: {{ $ctx.Values.image.pullPolicy }}
+              command:
+                {{- toYaml $job.command | nindent 16 }}
+              envFrom:
+                - configMapRef:
+                    name: {{ include "telegram-ai-agent.componentName" (dict "ctx" $ctx "name" "backend-config") }}
+                - secretRef:
+                    name: {{ $ctx.Values.secret.name }}
+              {{- with $job.extraEnv }}
+              env:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              resources:
+                {{- toYaml $job.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: {}
+{{- end }}
+{{- end }}
+{{- end }}

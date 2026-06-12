@@ -215,6 +215,42 @@ def test_prod_compose_hardening_contract(tmp_path: Path) -> None:
     assert services["backend"]["environment"]["COMPOSIO_MODE"] == "real"
     assert services["backend"]["environment"]["COMPOSIO_API_KEY"] == "composio-prod-key"
 
+    expected_worker_commands = {
+        "broadcast-worker": ["python", "-m", "app.workers.broadcast", "--loop"],
+        "video-polling-worker": [
+            "python",
+            "-m",
+            "app.workers.video_polling",
+            "--loop",
+            "--interval-s",
+            "10",
+        ],
+    }
+    assert set(expected_worker_commands).issubset(services)
+    for service_name, expected_command in expected_worker_commands.items():
+        service = services[service_name]
+        assert service["image"] == VALID_ENV["BACKEND_IMAGE"]
+        assert service["command"] == expected_command
+        assert service["read_only"] is True
+        assert "ALL" in service.get("cap_drop", [])
+        assert "no-new-privileges:true" in service.get("security_opt", [])
+
+    expected_scheduled_worker_modules = {
+        "subscriptions-worker": "app.workers.subscriptions",
+        "account-deletion-worker": "app.workers.account_deletion",
+        "daily-analytics-worker": "app.workers.daily_analytics",
+        "token-usage-partitions-worker": "app.workers.token_usage_partitions",
+    }
+    assert set(expected_scheduled_worker_modules).issubset(services)
+    for service_name, module in expected_scheduled_worker_modules.items():
+        service = services[service_name]
+        shell_command = "\n".join(service["command"])
+        assert f"python -m {module}" in shell_command
+        assert "sleep" in shell_command
+        assert service["read_only"] is True
+        assert "ALL" in service.get("cap_drop", [])
+        assert "no-new-privileges:true" in service.get("security_opt", [])
+
     caddy = services["caddy"]
     assert caddy["entrypoint"] == ["/bin/sh", "-c"]
     assert "/tmp/caddy run" in "\n".join(caddy["command"])
