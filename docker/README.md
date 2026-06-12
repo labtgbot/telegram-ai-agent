@@ -37,8 +37,8 @@ docker build -f docker/Dockerfile.backend --target prod -t tgai-backend:prod .
 
 `compose.prod.yml` intentionally fails fast when release image references or
 secrets are missing. Set explicit `BACKEND_IMAGE`, `MINI_APP_IMAGE`,
-`ADMIN_IMAGE`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `CADDY_DATA_DIR`, and
-`CADDY_CONFIG_DIR` in `.env.prod`.
+`ADMIN_IMAGE`, `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `COMPOSIO_API_KEY`,
+`CADDY_DATA_DIR`, and `CADDY_CONFIG_DIR` in `.env.prod`.
 
 The Caddy directories must be writable by UID/GID `65534` because the
 production-like stack runs Caddy as a non-root user:
