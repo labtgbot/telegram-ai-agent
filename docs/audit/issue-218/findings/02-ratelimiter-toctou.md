@@ -8,7 +8,7 @@
 | Stage | Stage 1 - High priority |
 | Labels | `security`, `backend`, `stage-1-high`, `complexity-medium` |
 | Status | Confirmed |
-| GitHub issue | _pending_ |
+| GitHub issue | https://github.com/labtgbot/telegram-ai-agent/issues/221 |
 
 ## Кратко
 

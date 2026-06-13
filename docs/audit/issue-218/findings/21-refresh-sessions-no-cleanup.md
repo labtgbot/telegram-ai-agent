@@ -8,7 +8,7 @@
 | Stage | Stage 3 - Low priority |
 | Labels | `backend`, `database`, `stage-3-low`, `complexity-low` |
 | Status | Confirmed |
-| GitHub issue | _pending_ |
+| GitHub issue | https://github.com/labtgbot/telegram-ai-agent/issues/240 |
 
 ## Кратко
 
