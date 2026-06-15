@@ -18,15 +18,11 @@ export function ErrorFallback({
   testId = "error-fallback",
 }: ErrorFallbackProps): ReactElement {
   return (
-    <div
-      className="flex min-h-[60vh] items-center justify-center px-4 py-8"
-      data-testid={testId}
-      role="alert"
-    >
-      <section className="w-full max-w-sm rounded-tg border border-tg-separator bg-tg-section-bg p-5 text-center shadow-tg">
-        <h2 className="text-lg font-semibold text-tg-text">{title}</h2>
-        <p className="mt-2 text-sm leading-6 text-tg-hint">{message}</p>
-        <Button className="mt-4 w-full" onClick={onAction}>
+    <div className="error-fallback" data-testid={testId} role="alert">
+      <section className="error-fallback__panel">
+        <h2 className="error-fallback__title">{title}</h2>
+        <p className="error-fallback__message">{message}</p>
+        <Button className="error-fallback__button" onClick={onAction}>
           {actionLabel}
         </Button>
       </section>
