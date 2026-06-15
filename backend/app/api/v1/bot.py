@@ -3,9 +3,8 @@
 Telegram POSTs every update to ``POST /api/v1/bot/webhook``.  We verify the
 ``X-Telegram-Bot-Api-Secret-Token`` header (set when registering the webhook
 via ``setWebhook``) and claim the Telegram ``update_id`` in Redis before
-dispatching. Duplicate updates and handler failures return ``200 OK`` so
-Telegram does not re-run non-idempotent side effects; an unavailable
-idempotency store returns ``503`` before dispatch so Telegram can retry later.
+dispatching. Duplicate updates return ``200 OK``; an unavailable idempotency
+store or failed processing path returns ``5xx`` so Telegram can retry later.
 """
 
 from __future__ import annotations
@@ -106,6 +105,34 @@ async def _claim_update_id(redis: Redis, update_id: int, *, ttl_seconds: int) ->
     return bool(await redis.set(_update_idempotency_key(update_id), "1", ex=ttl, nx=True))
 
 
+async def _release_update_id_claim(redis: Redis, update_id: int) -> None:
+    await redis.delete(_update_idempotency_key(update_id))
+
+
+async def _rollback_and_release_update_id_claim(
+    *,
+    session: Any,
+    redis: Redis,
+    update_id: int | None,
+) -> None:
+    try:
+        await session.rollback()
+    finally:
+        if update_id is not None:
+            try:
+                await _release_update_id_claim(redis, update_id)
+            except RedisError as exc:
+                logger.exception(
+                    "bot.webhook.idempotency_release_failed",
+                    update_id=update_id,
+                    error=str(exc),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="idempotency_store_unavailable",
+                ) from exc
+
+
 @router.post(
     "/webhook",
     response_model=WebhookAck,
@@ -150,13 +177,30 @@ async def telegram_webhook(
             session=session,
             composio=composio,
         )
-        try:
-            await session.commit()
-        except Exception as exc:  # noqa: BLE001 — rollback below logs cause
-            logger.exception("bot.webhook.commit_failed", error=str(exc))
-            await session.rollback()
     except Exception as exc:  # noqa: BLE001 — dispatcher already logged
         logger.exception("bot.webhook.unhandled", error=str(exc))
-        await session.rollback()
+        await _rollback_and_release_update_id_claim(
+            session=session,
+            redis=redis,
+            update_id=update_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="webhook_processing_failed",
+        ) from exc
+
+    try:
+        await session.commit()
+    except Exception as exc:  # noqa: BLE001 — rollback below logs cause
+        logger.exception("bot.webhook.commit_failed", error=str(exc))
+        await _rollback_and_release_update_id_claim(
+            session=session,
+            redis=redis,
+            update_id=update_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="webhook_processing_failed",
+        ) from exc
 
     return WebhookAck()
