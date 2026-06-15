@@ -49,3 +49,12 @@ def test_resolve_client_ip_skips_trusted_proxy_hops_from_right() -> None:
     )
 
     assert resolve_client_ip(request, trusted_proxy_ips="10.0.0.0/24") == "198.51.100.7"
+
+
+def test_resolve_client_ip_uses_peer_when_all_forwarded_hops_are_trusted() -> None:
+    request = _request(
+        client_host="10.0.0.10",
+        x_forwarded_for="10.0.0.40, 10.0.0.20",
+    )
+
+    assert resolve_client_ip(request, trusted_proxy_ips="10.0.0.0/24") == "10.0.0.10"

@@ -57,7 +57,9 @@ def resolve_client_ip(
     ``X-Forwarded-For`` is considered only when the direct peer belongs to
     ``TRUSTED_PROXY_IPS``. The selected hop is the right-most untrusted IP,
     so a proxy-appended chain like ``spoofed, real-client`` resolves to
-    ``real-client`` rather than the attacker-controlled left-most value.
+    ``real-client`` rather than the attacker-controlled left-most value. If
+    every forwarded hop is trusted, the direct peer is returned because the
+    chain does not contain a trustworthy client hop.
     """
 
     peer_host = request.client.host.strip() if request.client and request.client.host else ""
@@ -79,8 +81,6 @@ def resolve_client_ip(
     for hop in reversed(forwarded_ips):
         if not _is_trusted_proxy(hop, trusted_networks):
             return str(hop)
-    if forwarded_ips:
-        return str(forwarded_ips[0])
     return peer_host
 
 
