@@ -6,16 +6,28 @@ vi.mock("@/lib/auth/cookies", () => ({
   readAccessToken: vi.fn(),
 }));
 
+vi.mock("@/lib/auth/tokens", () => ({
+  TokenExpiredError: class TokenExpiredError extends Error {},
+  TokenInvalidError: class TokenInvalidError extends Error {},
+  verifyAdminAccessToken: vi.fn(),
+}));
+
 vi.mock("@/lib/env", () => ({
   serverEnv: () => ({ apiBaseUrl: "http://backend/api/v1" }),
   publicEnv: { apiBaseUrl: "http://backend/api/v1" },
 }));
 
 import { readAccessToken } from "@/lib/auth/cookies";
+import { verifyAdminAccessToken } from "@/lib/auth/tokens";
 
 describe("GET /api/admin/analytics/export.csv", () => {
   beforeEach(() => {
     vi.mocked(readAccessToken).mockResolvedValue("token-xyz");
+    vi.mocked(verifyAdminAccessToken).mockResolvedValue({
+      sub: "42",
+      role: "support_admin",
+      type: "access",
+    });
   });
 
   afterEach(() => {
@@ -26,6 +38,22 @@ describe("GET /api/admin/analytics/export.csv", () => {
     vi.mocked(readAccessToken).mockResolvedValue(undefined);
     const response = await GET(new Request("http://localhost/api/admin/analytics/export.csv"));
     expect(response.status).toBe(401);
+    expect(verifyAdminAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 for analysts before contacting the backend", async () => {
+    vi.mocked(verifyAdminAccessToken).mockResolvedValue({
+      sub: "42",
+      role: "analyst",
+      type: "access",
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await GET(new Request("http://localhost/api/admin/analytics/export.csv"));
+
+    expect(response.status).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("proxies the request, forwards every query param and preserves the upstream filename", async () => {

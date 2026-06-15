@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { readAccessToken } from "@/lib/auth/cookies";
+import { requireAdminApiRole } from "@/lib/auth/api-routes";
 import { serverEnv } from "@/lib/env";
 
 /**
@@ -13,10 +13,8 @@ import { serverEnv } from "@/lib/env";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
-  const token = await readAccessToken();
-  if (!token) {
-    return NextResponse.json({ detail: "unauthorized" }, { status: 401 });
-  }
+  const auth = await requireAdminApiRole("support_admin");
+  if (!auth.ok) return auth.response;
 
   const inbound = new URL(request.url);
   const upstream = new URL(`${serverEnv().apiBaseUrl}/admin/analytics/export.csv`);
@@ -25,7 +23,7 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   const response = await fetch(upstream.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: `Bearer ${auth.token}` },
     cache: "no-store",
   });
 
