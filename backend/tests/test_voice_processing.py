@@ -8,11 +8,19 @@ the suite runs without a database (same pattern as
 
 from __future__ import annotations
 
+import base64
+import io
+import wave
+from collections.abc import Iterator
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from typing import Any
 
+import httpx
 import pytest
 
+from app.services import voice_processing as voice_processing_module
 from app.services.composio import (
     ComposioTransientError,
     MockComposioClient,
@@ -199,14 +207,80 @@ def composio_mock() -> MockComposioClient:
     return MockComposioClient()
 
 
+@pytest.fixture
+def oversized_audio_url() -> Iterator[str]:
+    class _OversizedAudioHandler(BaseHTTPRequestHandler):
+        def do_HEAD(self) -> None:  # noqa: N802 - stdlib callback name
+            self.send_response(200)
+            self.send_header("Content-Length", str(MAX_AUDIO_BYTES + 1))
+            self.end_headers()
+
+        def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
+            self.send_response(200)
+            self.send_header("Content-Length", str(MAX_AUDIO_BYTES + 1))
+            self.end_headers()
+            self.wfile.write(b"x")
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _OversizedAudioHandler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}/voice.wav"
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
 def _build_service(
     session: _FakeSession,
     composio: MockComposioClient,
     tokens: _FakeTokenService,
+    *,
+    audio_bytes: bytes | None = None,
+    audio_http_client: httpx.AsyncClient | None = None,
 ) -> VoiceProcessingService:
-    service = VoiceProcessingService(session, composio)  # type: ignore[arg-type]
+    service = VoiceProcessingService(
+        session,
+        composio,
+        audio_http_client=audio_http_client or _audio_http_client(audio_bytes),
+    )  # type: ignore[arg-type]
     service._tokens = tokens  # type: ignore[assignment]
     return service
+
+
+def _wav_bytes(*, duration_seconds: float = 1.0, frame_rate: int = 10) -> bytes:
+    buffer = io.BytesIO()
+    frame_count = int(duration_seconds * frame_rate)
+    with wave.open(buffer, "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(1)
+        audio.setframerate(frame_rate)
+        audio.writeframes(b"\x00" * frame_count)
+    return buffer.getvalue()
+
+
+def _audio_http_client(
+    audio_bytes: bytes | None = None,
+    *,
+    include_content_length: bool = True,
+) -> httpx.AsyncClient:
+    payload = audio_bytes or _wav_bytes()
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        headers = {"Content-Type": "audio/wav"}
+        if include_content_length:
+            headers["Content-Length"] = str(len(payload))
+        if request.method == "HEAD":
+            return httpx.Response(200, headers=headers)
+        if request.method == "GET":
+            return httpx.Response(200, headers=headers, content=payload)
+        return httpx.Response(405)
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(_handler))
 
 
 def _stt_only_handler(transcript: str = "hello world", language: str = "en"):
@@ -333,6 +407,74 @@ async def test_rejects_oversized_audio_base64(
     service = _build_service(fake_session, composio_mock, fake_tokens)
     with pytest.raises(InvalidAudioError):
         await service.process(user_id=42, audio_base64="a" * over_chars)
+
+
+@pytest.mark.asyncio
+async def test_rejects_audio_url_with_content_length_over_cap(
+    fake_session: _FakeSession,
+    composio_mock: MockComposioClient,
+    fake_tokens: _FakeTokenService,
+    oversized_audio_url: str,
+) -> None:
+    composio_mock.set_handler("elevenlabs", _stt_only_handler())
+    service = VoiceProcessingService(fake_session, composio_mock)  # type: ignore[arg-type]
+    service._tokens = fake_tokens  # type: ignore[assignment]
+
+    with pytest.raises(InvalidAudioError):
+        await service.process(user_id=42, audio_url=oversized_audio_url)
+
+    assert composio_mock.calls == []
+    assert fake_tokens.spends == []
+
+
+@pytest.mark.asyncio
+async def test_rejects_audio_url_when_stream_exceeds_cap_without_content_length(
+    fake_session: _FakeSession,
+    composio_mock: MockComposioClient,
+    fake_tokens: _FakeTokenService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(voice_processing_module, "MAX_AUDIO_BYTES", 8)
+    composio_mock.set_handler("elevenlabs", _stt_only_handler())
+    service = _build_service(
+        fake_session,
+        composio_mock,
+        fake_tokens,
+        audio_http_client=_audio_http_client(
+            _wav_bytes(duration_seconds=1.0),
+            include_content_length=False,
+        ),
+    )
+
+    with pytest.raises(InvalidAudioError):
+        await service.process(user_id=42, audio_url="https://example.com/a.wav")
+
+    assert composio_mock.calls == []
+    assert fake_tokens.spends == []
+
+
+@pytest.mark.asyncio
+async def test_rejects_audio_url_duration_over_cap_after_download(
+    fake_session: _FakeSession,
+    composio_mock: MockComposioClient,
+    fake_tokens: _FakeTokenService,
+) -> None:
+    composio_mock.set_handler("elevenlabs", _stt_only_handler())
+    service = _build_service(
+        fake_session,
+        composio_mock,
+        fake_tokens,
+        audio_bytes=_wav_bytes(
+            duration_seconds=MAX_AUDIO_DURATION_SECONDS + 1,
+            frame_rate=1,
+        ),
+    )
+
+    with pytest.raises(InvalidAudioError):
+        await service.process(user_id=42, audio_url="https://example.com/too-long.wav")
+
+    assert composio_mock.calls == []
+    assert fake_tokens.spends == []
 
 
 @pytest.mark.asyncio
@@ -514,7 +656,13 @@ async def test_voice_passes_request_metadata_to_composio(
     fake_tokens: _FakeTokenService,
 ) -> None:
     composio_mock.set_handler("elevenlabs", _stt_only_handler())
-    service = _build_service(fake_session, composio_mock, fake_tokens)
+    audio_bytes = _wav_bytes(duration_seconds=12.5, frame_rate=10)
+    service = _build_service(
+        fake_session,
+        composio_mock,
+        fake_tokens,
+        audio_bytes=audio_bytes,
+    )
 
     await service.process(
         user_id=42,
@@ -531,9 +679,16 @@ async def test_voice_passes_request_metadata_to_composio(
     assert call.request_id == "req-voice-1"
     assert call.user_id == "composio-user-42"
     assert call.metadata == {"app_user_id": "42", "phase": MODE_STT}
-    assert call.params["audio_url"] == "https://example.com/a.ogg"
+    assert call.params["audio_base64"] == base64.b64encode(audio_bytes).decode("ascii")
+    assert "audio_url" not in call.params
     assert call.params["language"] == "en"
     assert call.params["duration_seconds"] == 12.5
+
+    assert fake_tokens.spends[0].request_params is not None
+    stt_audit = fake_tokens.spends[0].request_params["stt"]
+    assert stt_audit["audio_url"] == "https://example.com/a.ogg"
+    assert stt_audit["audio_size_bytes"] == len(audio_bytes)
+    assert stt_audit["duration_seconds"] == 12.5
 
 
 @pytest.mark.asyncio

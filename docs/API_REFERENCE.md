@@ -259,6 +259,9 @@ Response (`200`):
 - `POST /generate/search` — токены: 3
 
 Все возвращают `{ "result": ..., "tokens_spent": N, "remaining_balance": M }`.
+`POST /generate/voice` принимает `audio_url` или `audio_base64`; для
+`audio_url` сервер предварительно скачивает аудио, ограничивает загрузку
+25 MB и отклоняет записи дольше 5 минут до вызова AI-провайдера.
 
 ## Admin Endpoints
 

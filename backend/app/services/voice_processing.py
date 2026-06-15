@@ -26,9 +26,14 @@ controls the outer transaction, matching every other service in
 
 from __future__ import annotations
 
+import base64
+import io
+import wave
 from dataclasses import dataclass
 from typing import Any, Final
+from urllib.parse import urlparse
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -64,6 +69,11 @@ MAX_PROMPT_LENGTH: Final[int] = 4000
 MAX_AUDIO_URL_LENGTH: Final[int] = 2048
 DEFAULT_VOICE: Final[str] = "default"
 MAX_VOICE_LENGTH: Final[int] = 64
+_AUDIO_DOWNLOAD_CHUNK_BYTES: Final[int] = 64 * 1024
+_AUDIO_FETCH_TIMEOUT_SECONDS: Final[float] = 10.0
+_AUDIO_HTTP_HEADERS: Final[dict[str, str]] = {
+    "User-Agent": "telegram-ai-agent/voice-url-validator",
+}
 
 
 # ----------------------------------------------------------------- errors
@@ -120,6 +130,14 @@ class VoiceProcessingResult:
     request_id: str | None = None
 
 
+@dataclass(frozen=True)
+class _RemoteAudioPayload:
+    audio_base64: str
+    size_bytes: int
+    duration_seconds: float
+    content_type: str | None = None
+
+
 # ------------------------------------------------------------------ service
 
 
@@ -130,9 +148,12 @@ class VoiceProcessingService:
         self,
         session: AsyncSession,
         composio: ComposioClient,
+        *,
+        audio_http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.session = session
         self.composio = composio
+        self._audio_http_client = audio_http_client
         self._tokens = TokenService(session, get_default_balance_cache())
 
     async def process(
@@ -157,7 +178,7 @@ class VoiceProcessingService:
         otherwise we synthesise the transcript itself.
 
         Raises:
-            InvalidAudioError: missing audio reference / duration over the cap.
+            InvalidAudioError: missing audio reference / duration or size over the cap.
             InvalidVoicePromptError: ``reply_prompt`` empty or too long.
             InsufficientTokensError: balance below :data:`VOICE_COST`.
             UserNotFoundError: ``user_id`` does not exist.
@@ -174,24 +195,45 @@ class VoiceProcessingService:
         )
         voice_clean = self._validate_voice(voice)
 
+        remote_audio: _RemoteAudioPayload | None = None
+        duration_for_request = duration_clean
+        if audio_url_clean is not None:
+            remote_audio = await self._load_audio_url(audio_url_clean)
+            duration_for_request = remote_audio.duration_seconds
+
         stt_request_params: dict[str, Any] = {
             "mode": MODE_STT,
         }
         if audio_url_clean is not None:
             stt_request_params["audio_url"] = audio_url_clean
+        if remote_audio is not None:
+            stt_request_params["audio_size_bytes"] = remote_audio.size_bytes
+            if remote_audio.content_type is not None:
+                stt_request_params["audio_content_type"] = remote_audio.content_type
         if audio_b64_clean is not None:
             # We only log a fingerprint of the base64 blob — storing the
             # whole payload in ``token_usage_logs`` would balloon the row.
             stt_request_params["audio_base64_len"] = len(audio_b64_clean)
         if language_clean is not None:
             stt_request_params["language"] = language_clean
-        if duration_clean is not None:
-            stt_request_params["duration_seconds"] = duration_clean
+        if duration_for_request is not None:
+            stt_request_params["duration_seconds"] = duration_for_request
 
-        stt_provider_params: dict[str, Any] = dict(stt_request_params)
+        stt_provider_params: dict[str, Any] = {
+            "mode": MODE_STT,
+        }
+        provider_audio_base64 = audio_b64_clean or (
+            remote_audio.audio_base64 if remote_audio is not None else None
+        )
         # The Composio toolkit expects the binary inline when present.
-        if audio_b64_clean is not None:
-            stt_provider_params["audio_base64"] = audio_b64_clean
+        if provider_audio_base64 is not None:
+            stt_provider_params["audio_base64"] = provider_audio_base64
+        elif audio_url_clean is not None:
+            stt_provider_params["audio_url"] = audio_url_clean
+        if language_clean is not None:
+            stt_provider_params["language"] = language_clean
+        if duration_for_request is not None:
+            stt_provider_params["duration_seconds"] = duration_for_request
 
         spend = await self._tokens.spend(
             user_id=user_id,
@@ -328,7 +370,7 @@ class VoiceProcessingService:
             language=detected_language,
             reply_text=reply_text,
             reply_audio_url=reply_audio_url,
-            duration_seconds=duration_clean,
+            duration_seconds=duration_for_request,
             tokens_spent=VOICE_COST,
             new_balance=spend.new_balance,
             composio_tool=primary_result.tool,
@@ -431,6 +473,158 @@ class VoiceProcessingService:
                 provider_error=result.error,
             )
         return result
+
+    async def _load_audio_url(self, audio_url: str) -> _RemoteAudioPayload:
+        client = self._audio_http_client
+        if client is not None:
+            return await self._load_audio_url_with_client(client, audio_url)
+
+        timeout = httpx.Timeout(_AUDIO_FETCH_TIMEOUT_SECONDS)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as owned_client:
+            return await self._load_audio_url_with_client(owned_client, audio_url)
+
+    async def _load_audio_url_with_client(
+        self,
+        client: httpx.AsyncClient,
+        audio_url: str,
+    ) -> _RemoteAudioPayload:
+        try:
+            head_response = await client.head(
+                audio_url,
+                headers=_AUDIO_HTTP_HEADERS,
+                follow_redirects=True,
+            )
+        except httpx.HTTPError as exc:
+            logger.info(
+                "voice.audio_url_head_failed",
+                audio_url_len=len(audio_url),
+                error=str(exc),
+            )
+        else:
+            if 200 <= head_response.status_code < 400:
+                self._assert_content_length_within_cap(head_response.headers)
+
+        chunks: list[bytes] = []
+        total = 0
+        content_type: str | None = None
+        try:
+            async with client.stream(
+                "GET",
+                audio_url,
+                headers=_AUDIO_HTTP_HEADERS,
+                follow_redirects=True,
+            ) as response:
+                if response.status_code < 200 or response.status_code >= 300:
+                    raise InvalidAudioError(
+                        f"audio_url returned HTTP {response.status_code}"
+                    )
+                self._assert_content_length_within_cap(response.headers)
+                content_type = response.headers.get("Content-Type")
+
+                async for chunk in response.aiter_bytes(
+                    chunk_size=_AUDIO_DOWNLOAD_CHUNK_BYTES
+                ):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > MAX_AUDIO_BYTES:
+                        raise InvalidAudioError(
+                            f"audio payload must be at most {MAX_AUDIO_BYTES} bytes"
+                        )
+                    chunks.append(chunk)
+        except httpx.HTTPError as exc:
+            raise InvalidAudioError("audio_url could not be fetched") from exc
+
+        if total == 0:
+            raise InvalidAudioError("audio_url returned empty audio")
+
+        audio_bytes = b"".join(chunks)
+        duration = self._extract_audio_duration_seconds(
+            audio_bytes,
+            content_type=content_type,
+            audio_url=audio_url,
+        )
+        self._validate_duration(duration)
+        return _RemoteAudioPayload(
+            audio_base64=base64.b64encode(audio_bytes).decode("ascii"),
+            size_bytes=total,
+            duration_seconds=duration,
+            content_type=content_type,
+        )
+
+    @staticmethod
+    def _assert_content_length_within_cap(headers: httpx.Headers) -> None:
+        value = headers.get("Content-Length")
+        if value is None:
+            return
+        try:
+            size = int(value)
+        except ValueError:
+            return
+        if size > MAX_AUDIO_BYTES:
+            raise InvalidAudioError(f"audio payload must be at most {MAX_AUDIO_BYTES} bytes")
+
+    @classmethod
+    def _extract_audio_duration_seconds(
+        cls,
+        audio_bytes: bytes,
+        *,
+        content_type: str | None,
+        audio_url: str,
+    ) -> float:
+        duration = cls._extract_mutagen_duration_seconds(audio_bytes, audio_url=audio_url)
+        if duration is None:
+            duration = cls._extract_wave_duration_seconds(audio_bytes)
+        if duration is None:
+            logger.info(
+                "voice.audio_url_duration_unknown",
+                audio_url_len=len(audio_url),
+                content_type=content_type,
+                size_bytes=len(audio_bytes),
+            )
+            raise InvalidAudioError("audio_url duration could not be determined")
+        return duration
+
+    @staticmethod
+    def _extract_mutagen_duration_seconds(
+        audio_bytes: bytes,
+        *,
+        audio_url: str,
+    ) -> float | None:
+        try:
+            from mutagen import File as MutagenFile
+        except ImportError:
+            return None
+
+        fileobj = io.BytesIO(audio_bytes)
+        filename = urlparse(audio_url).path.rsplit("/", 1)[-1] or "audio"
+        fileobj.name = filename
+        try:
+            audio = MutagenFile(fileobj)
+        except Exception as exc:  # noqa: BLE001 - malformed media should be rejected
+            logger.debug(
+                "voice.audio_url_mutagen_failed",
+                audio_url_len=len(audio_url),
+                error=str(exc),
+            )
+            return None
+        info = getattr(audio, "info", None)
+        length = getattr(info, "length", None)
+        if isinstance(length, (int, float)) and length >= 0:
+            return float(length)
+        return None
+
+    @staticmethod
+    def _extract_wave_duration_seconds(audio_bytes: bytes) -> float | None:
+        try:
+            with wave.open(io.BytesIO(audio_bytes), "rb") as audio:
+                frame_rate = audio.getframerate()
+                frame_count = audio.getnframes()
+        except (EOFError, wave.Error):
+            return None
+        if frame_rate <= 0:
+            return None
+        return frame_count / float(frame_rate)
 
     @staticmethod
     def _extract_transcript(result: ToolResult) -> str:
