@@ -5,6 +5,8 @@ of the Redis API listed in ``_AsyncRedisLike``, so a small fake suffices.
 """
 from __future__ import annotations
 
+import asyncio
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -63,6 +65,24 @@ class _PipelineOp:
         self.args = args
 
 
+class _PeekBarrier:
+    """One-shot barrier used to reproduce check-then-record races in tests."""
+
+    def __init__(self, parties: int) -> None:
+        self._parties = parties
+        self._arrived = 0
+        self._condition = asyncio.Condition()
+
+    async def wait(self) -> None:
+        async with self._condition:
+            self._arrived += 1
+            if self._arrived >= self._parties:
+                self._condition.notify_all()
+                return
+            while self._arrived < self._parties:
+                await self._condition.wait()
+
+
 class _FakePipeline:
     def __init__(self, store: FakeRedis, *, transaction: bool) -> None:
         self.store = store
@@ -85,19 +105,25 @@ class _FakePipeline:
         results: list[Any] = []
         for op in self.ops:
             results.append(self.store._apply(op))
+        await self.store._maybe_wait_after_peek_pipeline(self.ops, self.transaction)
         return results
 
 
 class FakeRedis:
     """In-memory async-compatible substitute for :class:`redis.asyncio.Redis`.
 
-    Implements only the subset the limiter touches: ``pipeline``,
-    ``zrange``, and the ops the pipeline queues.
+    Implements only the subset the limiter touches. ``eval`` mirrors the
+    rate-limiter Lua script so consume checks remain atomic in tests.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, peek_barrier_parties: int | None = None) -> None:
         self.sets: dict[str, _FakeZSet] = {}
         self.expirations: dict[str, int] = {}
+        self._peek_barrier = (
+            _PeekBarrier(peek_barrier_parties)
+            if peek_barrier_parties is not None
+            else None
+        )
 
     def _get(self, key: str) -> _FakeZSet:
         if key not in self.sets:
@@ -123,6 +149,74 @@ class FakeRedis:
 
     def pipeline(self, transaction: bool = False) -> _FakePipeline:
         return _FakePipeline(self, transaction=transaction)
+
+    async def eval(
+        self,
+        script: str,
+        numkeys: int,
+        *keys_and_args: Any,
+    ) -> list[int]:
+        keys = [str(key) for key in keys_and_args[:numkeys]]
+        argv = list(keys_and_args[numkeys:])
+        now_ms = int(argv[0])
+        record = int(argv[1])
+        member = str(argv[2])
+
+        counts: list[int] = []
+        limits: list[int] = []
+        windows: list[int] = []
+        for idx, key in enumerate(keys):
+            limit = int(argv[3 + idx * 2])
+            window_seconds = int(argv[4 + idx * 2])
+            zset = self._get(key)
+            zset.remrangebyscore(0, now_ms - window_seconds * 1000)
+            counts.append(zset.card())
+            limits.append(limit)
+            windows.append(window_seconds)
+
+        def reset_after(idx: int) -> int:
+            if counts[idx] <= 0:
+                return 0
+            oldest = self._get(keys[idx]).range(0, 0, withscores=True)
+            if not oldest:
+                return 0
+            _member, oldest_score = oldest[0]
+            reset_ms = int(oldest_score) + windows[idx] * 1000
+            return int(math.ceil(max(0, reset_ms - now_ms) / 1000.0))
+
+        tightest_idx = min(
+            range(numkeys),
+            key=lambda idx: (limits[idx] - counts[idx], -windows[idx]),
+        )
+
+        for idx in range(numkeys):
+            if counts[idx] >= limits[idx]:
+                bucket_reset = reset_after(idx)
+                return [0, idx + 1, counts[idx], 0, bucket_reset, max(1, bucket_reset)]
+
+        if record == 1:
+            for idx, key in enumerate(keys):
+                self._get(key).add({member: now_ms})
+                self.expirations[key] = windows[idx]
+
+        remaining = limits[tightest_idx] - counts[tightest_idx]
+        if record == 1:
+            remaining -= 1
+        remaining = max(0, remaining)
+        bucket_reset = reset_after(tightest_idx)
+        if bucket_reset == 0 and record == 1:
+            bucket_reset = windows[tightest_idx]
+        return [1, tightest_idx + 1, counts[tightest_idx], remaining, bucket_reset, 0]
+
+    async def _maybe_wait_after_peek_pipeline(
+        self,
+        ops: list[_PipelineOp],
+        transaction: bool,
+    ) -> None:
+        if transaction or self._peek_barrier is None:
+            return
+        if all(op.op in {"zremrangebyscore", "zcard"} for op in ops):
+            await self._peek_barrier.wait()
 
     async def zrange(
         self,
@@ -179,6 +273,28 @@ async def test_consume_counts_each_request() -> None:
         result = await limiter.consume(plan=PLAN_FREE, identifier="9")
         assert result.allowed is True
         assert result.remaining == expected_remaining
+
+
+@pytest.mark.asyncio
+async def test_concurrent_consume_never_allows_more_than_limit() -> None:
+    attempts = 5
+    redis = FakeRedis(peek_barrier_parties=attempts)
+    limiter = RateLimiter(
+        redis,
+        _config({PLAN_FREE: {"per_hour": _hourly(1)}}),
+    )
+
+    async def consume_once() -> bool:
+        try:
+            await limiter.consume(plan=PLAN_FREE, identifier="race")
+        except RateLimitedError:
+            return False
+        return True
+
+    allowed = await asyncio.gather(*(consume_once() for _ in range(attempts)))
+
+    assert allowed.count(True) == 1
+    assert redis._get("rl:free:race:per_hour").card() == 1
 
 
 @pytest.mark.asyncio

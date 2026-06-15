@@ -15,15 +15,12 @@ restrictive one wins; on the happy path we ZADD the timestamp into all
 relevant buckets atomically so a future "expensive" bucket can't be
 bypassed by hitting it before the cheaper ones.
 
-The Redis interaction is intentionally pure pipeline / WATCH-free.
-That keeps the implementation testable against in-memory doubles and
-robust if the operator switches Redis backends (e.g. KeyDB). The cost
-is two round trips per check (peek then conditional commit), which is
-well below the < 1 ms p95 target from ADR-0004.
+Redis executes the check-and-record path as one Lua script: prune stale
+entries, count every bucket, and conditionally record the new event
+without yielding to competing clients between the check and the write.
 """
 from __future__ import annotations
 
-import math
 import secrets
 import time
 from dataclasses import dataclass
@@ -119,15 +116,7 @@ class _AsyncRedisLike(Protocol):
     doubles both satisfy it.
     """
 
-    def pipeline(self, transaction: bool = ...) -> Any: ...
-    async def zrange(
-        self,
-        name: Any,
-        start: Any,
-        end: Any,
-        *,
-        withscores: bool = ...,
-    ) -> Any: ...
+    async def eval(self, script: str, numkeys: int, *keys_and_args: Any) -> Any: ...
 
 
 # ------------------------------------------------------------- key & helpers
@@ -143,10 +132,105 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _seconds_until(reset_ms: int, now_ms: int) -> int:
-    """Round up to the nearest second so Retry-After never under-reports."""
-    delta = max(0, reset_ms - now_ms)
-    return int(math.ceil(delta / 1000.0))
+_ATOMIC_EVALUATE_SCRIPT = """
+local now_ms = tonumber(ARGV[1])
+local record = tonumber(ARGV[2])
+local member = ARGV[3]
+local bucket_count = #KEYS
+
+local counts = {}
+local limits = {}
+local windows = {}
+
+local function seconds_until(reset_ms)
+    local delta = reset_ms - now_ms
+    if delta < 0 then
+        delta = 0
+    end
+    return math.ceil(delta / 1000)
+end
+
+local function bucket_reset_after(index)
+    if counts[index] <= 0 then
+        return 0
+    end
+    local oldest = redis.call("ZRANGE", KEYS[index], 0, 0, "WITHSCORES")
+    if oldest[2] == nil then
+        return 0
+    end
+    local reset_ms = tonumber(oldest[2]) + (windows[index] * 1000)
+    return seconds_until(reset_ms)
+end
+
+local tightest_index = 1
+local tightest_remaining = nil
+local tightest_window = 0
+
+for i = 1, bucket_count do
+    local arg_offset = 4 + ((i - 1) * 2)
+    local limit = tonumber(ARGV[arg_offset])
+    local window_seconds = tonumber(ARGV[arg_offset + 1])
+    local min_score = now_ms - (window_seconds * 1000)
+
+    redis.call("ZREMRANGEBYSCORE", KEYS[i], 0, min_score)
+    local count = tonumber(redis.call("ZCARD", KEYS[i]))
+
+    counts[i] = count
+    limits[i] = limit
+    windows[i] = window_seconds
+
+    local remaining = limit - count
+    local is_tighter = false
+    if tightest_remaining == nil then
+        is_tighter = true
+    elseif remaining < tightest_remaining then
+        is_tighter = true
+    elseif remaining == tightest_remaining and window_seconds > tightest_window then
+        is_tighter = true
+    end
+
+    if is_tighter then
+        tightest_index = i
+        tightest_remaining = remaining
+        tightest_window = window_seconds
+    end
+end
+
+for i = 1, bucket_count do
+    if counts[i] >= limits[i] then
+        local reset_after = bucket_reset_after(i)
+        local retry_after = reset_after
+        if retry_after < 1 then
+            retry_after = 1
+        end
+        return {0, i, counts[i], 0, reset_after, retry_after}
+    end
+end
+
+if record == 1 then
+    for i = 1, bucket_count do
+        redis.call("ZADD", KEYS[i], now_ms, member)
+        redis.call("EXPIRE", KEYS[i], windows[i])
+    end
+end
+
+local remaining = limits[tightest_index] - counts[tightest_index]
+if record == 1 then
+    remaining = remaining - 1
+end
+if remaining < 0 then
+    remaining = 0
+end
+
+local reset_after = 0
+if counts[tightest_index] > 0 then
+    reset_after = bucket_reset_after(tightest_index)
+elseif record == 1 then
+    reset_after = windows[tightest_index]
+end
+
+return {1, tightest_index, counts[tightest_index], remaining, reset_after, 0}
+"""
 
 
 # ------------------------------------------------------------- plan resolver
@@ -300,129 +384,66 @@ class RateLimiter:
                 retry_after=0,
             )
 
-        # Round 1: peek each bucket via a single pipeline. We need both
-        # the post-eviction count and the oldest surviving timestamp
-        # (the latter drives Retry-After when we're over the limit).
-        pipe = self._redis.pipeline(transaction=False)
-        keys: list[str] = []
-        for quota_key, rule in rules:
-            key = self._key(plan, identifier, quota_key)
-            keys.append(key)
-            window_ms = rule.window_seconds * 1000
-            min_score = now_ms - window_ms
-            # 1) drop expired entries, 2) count what remains.
-            pipe.zremrangebyscore(key, 0, min_score)
-            pipe.zcard(key)
-        raw = await pipe.execute()
+        keys = [self._key(plan, identifier, quota_key) for quota_key, _rule in rules]
+        # ZSET members must be unique; without entropy two calls within
+        # the same millisecond would collapse into one entry and let
+        # callers bypass the quota.
+        member = f"{now_ms}:{secrets.token_hex(6)}" if record else ""
+        args: list[Any] = [now_ms, 1 if record else 0, member]
+        for _quota_key, rule in rules:
+            args.extend([rule.limit, rule.window_seconds])
 
-        # raw layout: for each rule we get 2 entries (zremrangebyscore, zcard).
-        peeks: list[tuple[str, RateLimitRule, str, int]] = []
-        for idx, (quota_key, rule) in enumerate(rules):
-            count = int(raw[idx * 2 + 1] or 0)
-            peeks.append((quota_key, rule, keys[idx], count))
-
-        # Identify the tightest bucket — smallest remaining slots wins,
-        # with the longest window breaking ties so daily caps surface
-        # before hourly ones when both have the same headroom.
-        tightest = min(
-            peeks,
-            key=lambda p: (p[1].limit - p[3], -p[1].window_seconds),
+        raw = await self._redis.eval(
+            _ATOMIC_EVALUATE_SCRIPT,
+            len(keys),
+            *keys,
+            *args,
         )
-        t_quota_key, t_rule, t_key, t_count = tightest
-        remaining = max(0, t_rule.limit - t_count)
+        allowed = bool(int(raw[0]))
+        rule_index = int(raw[1]) - 1
+        count = int(raw[2])
+        remaining = int(raw[3])
+        reset_after = int(raw[4])
+        retry_after = int(raw[5])
+        quota_key, rule = rules[rule_index]
 
-        # Find the oldest surviving timestamp to compute reset_after for
-        # whichever bucket is closest to capacity. We only need this for
-        # the tightest bucket.
-        reset_after = 0
-        if t_count > 0:
-            oldest = await self._redis.zrange(t_key, 0, 0, withscores=True)
-            if oldest:
-                _, oldest_score = oldest[0]
-                reset_ms = int(oldest_score) + t_rule.window_seconds * 1000
-                reset_after = _seconds_until(reset_ms, now_ms)
-
-        # Check every bucket for breach (not just the tightest — a less
-        # tight bucket could still be over its limit when limits change).
-        for quota_key, rule, key, count in peeks:
-            if count >= rule.limit:
-                # Find when this bucket resets.
-                oldest = await self._redis.zrange(key, 0, 0, withscores=True)
-                bucket_reset = 0
-                if oldest:
-                    _, oldest_score = oldest[0]
-                    reset_ms = int(oldest_score) + rule.window_seconds * 1000
-                    bucket_reset = _seconds_until(reset_ms, now_ms)
-                # Retry-After is the most permissive (shortest) wait that
-                # would unblock the caller for *this* bucket. Use at
-                # least one second so clients don't hot-loop.
-                retry_after = max(1, bucket_reset)
-                logger.info(
-                    "rate_limit.blocked",
-                    plan=plan,
-                    action=action,
-                    quota=quota_key,
-                    limit=rule.limit,
-                    count=count,
-                    retry_after=retry_after,
-                )
-                if record:
-                    raise RateLimitedError(
-                        plan=plan,
-                        action=action,
-                        quota_key=quota_key,
-                        limit=rule.limit,
-                        retry_after=retry_after,
-                        reset_after=bucket_reset,
-                    )
-                return RateLimitResult(
-                    allowed=False,
+        if not allowed:
+            logger.info(
+                "rate_limit.blocked",
+                plan=plan,
+                action=action,
+                quota=quota_key,
+                limit=rule.limit,
+                count=count,
+                retry_after=retry_after,
+            )
+            if record:
+                raise RateLimitedError(
                     plan=plan,
                     action=action,
                     quota_key=quota_key,
                     limit=rule.limit,
-                    remaining=0,
-                    reset_after=bucket_reset,
                     retry_after=retry_after,
+                    reset_after=reset_after,
                 )
-
-        if not record:
             return RateLimitResult(
-                allowed=True,
+                allowed=False,
                 plan=plan,
                 action=action,
-                quota_key=t_quota_key,
-                limit=t_rule.limit,
-                remaining=remaining,
+                quota_key=quota_key,
+                limit=rule.limit,
+                remaining=0,
                 reset_after=reset_after,
-                retry_after=0,
+                retry_after=retry_after,
             )
 
-        # Round 2: every bucket still has headroom — record the event.
-        # ZSET members must be unique; without entropy two calls within
-        # the same millisecond would collapse into one entry and let
-        # callers bypass the quota.
-        member = f"{now_ms}:{secrets.token_hex(6)}"
-        pipe = self._redis.pipeline(transaction=True)
-        for _quota_key, rule, key, _count in peeks:
-            pipe.zadd(key, {member: now_ms})
-            # TTL = window so empty buckets evict themselves automatically.
-            pipe.expire(key, rule.window_seconds)
-        await pipe.execute()
-
-        # After recording, the tightest bucket has one more entry.
-        new_remaining = max(0, remaining - 1)
-        if t_count + 1 >= 1 and reset_after == 0:
-            # If we just inserted the first item, the bucket resets a
-            # full window from now.
-            reset_after = t_rule.window_seconds
         return RateLimitResult(
             allowed=True,
             plan=plan,
             action=action,
-            quota_key=t_quota_key,
-            limit=t_rule.limit,
-            remaining=new_remaining,
+            quota_key=quota_key,
+            limit=rule.limit,
+            remaining=remaining,
             reset_after=reset_after,
             retry_after=0,
         )
