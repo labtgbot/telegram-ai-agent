@@ -168,6 +168,89 @@ async def test_claim_maps_duplicate_payment_marker_to_already_claimed(monkeypatc
 from app.models import DailyBonusClaim, Transaction, User  # noqa: E402
 
 
+class _MemoryRedis:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.expiries: dict[str, int | None] = {}
+        self.set_event = asyncio.Event()
+
+    async def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+    async def set(self, key: str, value: str, *, ex: int | None = None) -> None:
+        self.values[key] = value
+        self.expiries[key] = ex
+        self.set_event.set()
+
+
+@pytest.mark.asyncio
+async def test_claim_rollback_does_not_leave_phantom_cache(monkeypatch) -> None:
+    from app.services import daily_bonus as daily_bonus_module
+    from app.services.daily_bonus import DailyBonusService
+
+    class _EmptyResult:
+        def all(self):
+            return []
+
+        def first(self):
+            return None
+
+    class _Savepoint:
+        async def commit(self) -> None:
+            return None
+
+        async def rollback(self) -> None:
+            return None
+
+    class _Session:
+        def __init__(self) -> None:
+            self.added = []
+            self.rolled_back = False
+
+        async def execute(self, _stmt):
+            return _EmptyResult()
+
+        async def begin_nested(self):
+            return _Savepoint()
+
+        def add(self, row) -> None:
+            self.added.append(row)
+
+        async def flush(self) -> None:
+            return None
+
+        async def rollback(self) -> None:
+            self.rolled_back = True
+
+    class _Credit:
+        transaction_id = 777
+        new_balance = 10
+
+    class _TokenService:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        async def add(self, **_kwargs):
+            return _Credit()
+
+    monkeypatch.setattr(daily_bonus_module, "TokenService", _TokenService)
+
+    session = _Session()
+    redis = _MemoryRedis()
+    service = DailyBonusService(session, redis=redis)
+    when = datetime(2026, 5, 16, 9, 0, tzinfo=UTC)
+
+    await service.claim(42, now=when)
+    await session.rollback()
+
+    assert session.rolled_back is True
+    assert redis.values == {}
+
+    snapshot = await service.status(42, now=when)
+    assert snapshot.available is True
+    assert snapshot.last_claim_date is None
+
+
 async def _make_user(session, *, telegram_id: int, code: str) -> User:
     user = User(
         telegram_id=telegram_id,
@@ -329,6 +412,80 @@ async def test_status_fresh_user_is_available(db_session):
     assert snapshot.enabled is True
     assert snapshot.next_amount == 10  # would be streak day 1
     assert snapshot.last_claim_date is None
+
+
+@pytest.mark.asyncio
+async def test_rollback_after_claim_does_not_cache_phantom_claim(db_engine):
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.services.daily_bonus import DailyBonusService
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False, class_=AsyncSession)
+    redis = _MemoryRedis()
+    when = datetime(2026, 5, 16, 9, 0, tzinfo=UTC)
+
+    async with factory() as setup:
+        user = User(
+            telegram_id=9_300_013,
+            username="daily-rollback",
+            referral_code="DB-RB-1",
+            token_balance=0,
+        )
+        setup.add(user)
+        await setup.commit()
+        user_id = int(user.id)
+
+    try:
+        async with factory() as failed_session:
+            service = DailyBonusService(failed_session, redis=redis)
+            await service.claim(user_id, now=when)
+            await failed_session.rollback()
+
+        async with factory() as retry_session:
+            service = DailyBonusService(retry_session, redis=redis)
+            status = await service.status(user_id, now=when)
+            assert status.available is True
+
+            retry = await service.claim(user_id, now=when)
+            assert retry.amount == 10
+            await retry_session.commit()
+
+        await asyncio.wait_for(redis.set_event.wait(), timeout=1)
+        assert json.loads(redis.values[f"daily_bonus:user:{user_id}"]) == {
+            "claim_date": "2026-05-16",
+            "streak_day": 1,
+        }
+
+        async with factory() as verify:
+            claim_count = (
+                await verify.execute(
+                    select(func.count())
+                    .select_from(DailyBonusClaim)
+                    .where(DailyBonusClaim.user_id == user_id)
+                )
+            ).scalar_one()
+            balance = (
+                await verify.execute(select(User.token_balance).where(User.id == user_id))
+            ).scalar_one()
+
+        assert claim_count == 1
+        assert balance == 10
+    finally:
+        async with factory() as cleanup:
+            await cleanup.execute(
+                DailyBonusClaim.__table__.delete().where(
+                    DailyBonusClaim.user_id == user_id
+                )
+            )
+            await cleanup.execute(
+                Transaction.__table__.delete().where(Transaction.user_id == user_id)
+            )
+            user = (
+                await cleanup.execute(select(User).where(User.id == user_id))
+            ).scalar_one_or_none()
+            if user is not None:
+                await cleanup.delete(user)
+            await cleanup.commit()
 
 
 @pytest.mark.asyncio

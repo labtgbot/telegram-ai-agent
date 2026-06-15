@@ -46,6 +46,7 @@ to the env-default and logs a warning.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -53,9 +54,10 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any, Final
 
 from redis.asyncio import Redis
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session as SyncSession
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -76,6 +78,8 @@ REDIS_KEY_PREFIX: Final[str] = "daily_bonus:user:"
 # ~48h so a same-day status read after midnight UTC still hits cache,
 # while a long-skipped streak does not poison the cache forever.
 REDIS_TTL_SECONDS: Final[int] = 48 * 60 * 60
+SESSION_PENDING_CACHE_WRITES: Final[str] = "daily_bonus.pending_cache_writes"
+SESSION_OUTER_COMMIT_CACHE_WRITE: Final[str] = "daily_bonus.outer_commit_cache_write"
 
 
 # ----------------------------------------------------------------- exceptions
@@ -132,6 +136,14 @@ class _LatestClaim:
 
 
 @dataclass(frozen=True)
+class _PendingCacheWrite:
+    redis: Redis
+    key: str
+    payload: str
+    ttl_seconds: int
+
+
+@dataclass(frozen=True)
 class _RuntimeConfig:
     enabled: bool
     amounts: tuple[int, ...] = field(default=(10,))
@@ -143,6 +155,49 @@ class _RuntimeConfig:
         if idx >= len(self.amounts):
             idx = len(self.amounts) - 1
         return int(self.amounts[idx])
+
+
+async def _write_pending_cache(write: _PendingCacheWrite) -> None:
+    try:
+        await write.redis.set(write.key, write.payload, ex=write.ttl_seconds)
+    except Exception as exc:  # noqa: BLE001 — cache writes are best-effort
+        logger.warning("daily_bonus.cache_write_failed", error=str(exc))
+
+
+@event.listens_for(SyncSession, "before_commit")
+def _mark_daily_bonus_outer_commit(session: SyncSession) -> None:
+    if not session.info.get(SESSION_PENDING_CACHE_WRITES):
+        return
+    if session.get_nested_transaction() is not None:
+        return
+    session.info[SESSION_OUTER_COMMIT_CACHE_WRITE] = True
+
+
+@event.listens_for(SyncSession, "after_commit")
+def _dispatch_daily_bonus_cache_writes(session: SyncSession) -> None:
+    if not session.info.pop(SESSION_OUTER_COMMIT_CACHE_WRITE, False):
+        return
+    pending = session.info.pop(SESSION_PENDING_CACHE_WRITES, {})
+    if not pending:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.warning("daily_bonus.cache_write_no_running_loop")
+        return
+    for write in pending.values():
+        loop.create_task(_write_pending_cache(write))
+
+
+@event.listens_for(SyncSession, "after_transaction_end")
+def _clear_daily_bonus_cache_writes_after_rollback(
+    session: SyncSession,
+    transaction: Any,
+) -> None:
+    if transaction.parent is not None:
+        return
+    session.info.pop(SESSION_OUTER_COMMIT_CACHE_WRITE, None)
+    session.info.pop(SESSION_PENDING_CACHE_WRITES, None)
 
 
 # ---------------------------------------------------------------- helpers
@@ -373,7 +428,7 @@ class DailyBonusService:
                 next_available_at=_next_midnight_utc(today)
             ) from None
 
-        await self._write_latest_to_cache(
+        self._queue_latest_to_cache(
             user_id, _LatestClaim(claim_date=today, streak_day=streak_day)
         )
         logger.info(
@@ -427,24 +482,27 @@ class DailyBonusService:
             logger.warning("daily_bonus.cache_parse_failed", error=str(exc))
             return None
 
-    async def _write_latest_to_cache(
+    def _queue_latest_to_cache(
         self, user_id: int, snapshot: _LatestClaim
     ) -> None:
         if self.redis is None:
             return
-        try:
-            await self.redis.set(
-                self._redis_key(user_id),
-                json.dumps(
-                    {
-                        "claim_date": snapshot.claim_date.isoformat(),
-                        "streak_day": snapshot.streak_day,
-                    }
-                ),
-                ex=REDIS_TTL_SECONDS,
-            )
-        except Exception as exc:  # noqa: BLE001 — cache writes are best-effort
-            logger.warning("daily_bonus.cache_write_failed", error=str(exc))
+        sync_session = getattr(self.session, "sync_session", None)
+        if sync_session is None:
+            return
+        key = self._redis_key(user_id)
+        pending = sync_session.info.setdefault(SESSION_PENDING_CACHE_WRITES, {})
+        pending[key] = _PendingCacheWrite(
+            redis=self.redis,
+            key=key,
+            payload=json.dumps(
+                {
+                    "claim_date": snapshot.claim_date.isoformat(),
+                    "streak_day": snapshot.streak_day,
+                }
+            ),
+            ttl_seconds=REDIS_TTL_SECONDS,
+        )
 
     @staticmethod
     def _redis_key(user_id: int) -> str:
