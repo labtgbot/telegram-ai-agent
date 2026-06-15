@@ -19,8 +19,8 @@ Endpoints under ``/admin/content``:
 * ``DELETE /admin/content/welcomes/{id}``
 * ``GET    /admin/content/history`` — combined change history.
 
-Reads are open to any ``analyst`` and above; mutations require
-``support_admin`` and above.  Every mutating endpoint writes an
+Reads and mutations require ``support_admin`` and above, matching the admin
+dashboard ``/content`` page gate.  Every mutating endpoint writes an
 :class:`AdminAuditLog` row through the service layer in the same
 transaction.
 """
@@ -40,8 +40,9 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field
 
-from app.auth.dependencies import SessionDep, get_current_admin
-from app.auth.rbac import Role, require_role
+from app.auth.admin_access import ADMIN_CONTENT_MIN_ROLE
+from app.auth.dependencies import SessionDep
+from app.auth.rbac import require_role
 from app.core.client_ip import resolve_client_ip
 from app.core.logging import get_logger
 from app.models.admin_audit_log import AdminAuditLog
@@ -164,7 +165,7 @@ class PromptTemplateListResponse(BaseModel):
 )
 async def list_prompt_templates_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
     search: Annotated[str | None, Query(max_length=128)] = None,
     category: Annotated[str | None, Query(max_length=64)] = None,
     locale: Annotated[str | None, Query(max_length=8)] = None,
@@ -200,7 +201,7 @@ async def create_prompt_template_endpoint(
     payload: PromptTemplatePayload,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> PromptTemplateResponse:
     ip, ua = _request_meta(request)
     draft = PromptTemplateDraft(**payload.model_dump())
@@ -227,7 +228,7 @@ async def create_prompt_template_endpoint(
 async def get_prompt_template_endpoint(
     template_id: int,
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> PromptTemplateResponse:
     try:
         row = await get_prompt_template(session, template_id)
@@ -249,7 +250,7 @@ async def update_prompt_template_endpoint(
     payload: PromptTemplatePayload,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> PromptTemplateResponse:
     ip, ua = _request_meta(request)
     draft = PromptTemplateDraft(**payload.model_dump())
@@ -287,7 +288,7 @@ async def delete_prompt_template_endpoint(
     template_id: int,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> None:
     ip, ua = _request_meta(request)
     try:
@@ -364,7 +365,7 @@ class FaqItemListResponse(BaseModel):
 )
 async def list_faqs_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
     search: Annotated[str | None, Query(max_length=128)] = None,
     category: Annotated[str | None, Query(max_length=64)] = None,
     locale: Annotated[str | None, Query(max_length=8)] = None,
@@ -400,7 +401,7 @@ async def create_faq_endpoint(
     payload: FaqItemPayload,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> FaqItemResponse:
     ip, ua = _request_meta(request)
     draft = FaqItemDraft(**payload.model_dump())
@@ -422,7 +423,7 @@ async def create_faq_endpoint(
 async def get_faq_endpoint(
     faq_id: int,
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> FaqItemResponse:
     try:
         row = await get_faq_item(session, faq_id)
@@ -444,7 +445,7 @@ async def update_faq_endpoint(
     payload: FaqItemPayload,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> FaqItemResponse:
     ip, ua = _request_meta(request)
     draft = FaqItemDraft(**payload.model_dump())
@@ -477,7 +478,7 @@ async def delete_faq_endpoint(
     faq_id: int,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> None:
     ip, ua = _request_meta(request)
     try:
@@ -544,7 +545,7 @@ class WelcomeMessageListResponse(BaseModel):
 )
 async def list_welcomes_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
     locale: Annotated[str | None, Query(max_length=8)] = None,
     is_active: Annotated[bool | None, Query()] = None,
     page: Annotated[int, Query(ge=1, le=10_000)] = 1,
@@ -576,7 +577,7 @@ async def create_welcome_endpoint(
     payload: WelcomeMessagePayload,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> WelcomeMessageResponse:
     ip, ua = _request_meta(request)
     draft = WelcomeMessageDraft(**payload.model_dump())
@@ -598,7 +599,7 @@ async def create_welcome_endpoint(
 async def get_welcome_endpoint(
     welcome_id: int,
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> WelcomeMessageResponse:
     try:
         row = await get_welcome_message(session, welcome_id)
@@ -620,7 +621,7 @@ async def update_welcome_endpoint(
     payload: WelcomeMessagePayload,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> WelcomeMessageResponse:
     ip, ua = _request_meta(request)
     draft = WelcomeMessageDraft(**payload.model_dump())
@@ -653,7 +654,7 @@ async def delete_welcome_endpoint(
     welcome_id: int,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
 ) -> None:
     ip, ua = _request_meta(request)
     try:
@@ -718,7 +719,7 @@ ContentEntity = Literal["prompt_template", "faq_item", "welcome_message"]
 )
 async def content_history_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_CONTENT_MIN_ROLE))],
     entity: Annotated[ContentEntity | None, Query()] = None,
     entity_id: Annotated[int | None, Query(ge=1)] = None,
     page: Annotated[int, Query(ge=1, le=10_000)] = 1,

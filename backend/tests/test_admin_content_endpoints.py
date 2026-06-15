@@ -621,16 +621,27 @@ async def test_delete_prompt_404(build_app) -> None:
 
 
 @pytest.mark.asyncio
-async def test_analyst_can_read_but_not_mutate(build_app, admin_analyst) -> None:
-    # support admin seeds a row first
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/admin/content/prompt-templates",
+        "/api/v1/admin/content/prompt-templates/1",
+        "/api/v1/admin/content/faqs",
+        "/api/v1/admin/content/faqs/1",
+        "/api/v1/admin/content/welcomes",
+        "/api/v1/admin/content/welcomes/1",
+        "/api/v1/admin/content/history",
+    ],
+)
+async def test_content_reads_forbidden_for_analyst(build_app, admin_analyst, path) -> None:
     async with await _client(build_app["app"]) as c:
         await c.post("/api/v1/admin/content/prompt-templates", json=_prompt_body())
+        await c.post("/api/v1/admin/content/faqs", json=_faq_body())
+        await c.post("/api/v1/admin/content/welcomes", json=_welcome_body())
     build_app["current_admin"] = admin_analyst
     async with await _client(build_app["app"]) as c:
-        get_resp = await c.get("/api/v1/admin/content/prompt-templates")
-        del_resp = await c.delete("/api/v1/admin/content/prompt-templates/1")
-    assert get_resp.status_code == 200
-    assert del_resp.status_code == 403
+        resp = await c.get(path)
+    assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------- FAQs

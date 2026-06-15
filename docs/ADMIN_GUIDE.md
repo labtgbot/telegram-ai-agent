@@ -179,7 +179,7 @@ the **History** tab with delivery / read counts.
 
 ### 2.9 System (build / health)
 
-`/system` — diagnostic view (read-only for support_admin).
+`/system` — diagnostic view (super_admin).
 
 - Backend `/health` payload, image tags, last deploy time.
 - Redis / Postgres connection status, slow-query top 10.
