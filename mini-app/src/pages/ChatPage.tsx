@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { ChatComposer } from "@/components/chat/ChatComposer";
 import { MessageList } from "@/components/chat/MessageList";
@@ -29,6 +29,16 @@ function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function isObjectUrl(url: string | undefined): url is string {
+  return typeof url === "string" && url.startsWith("blob:");
+}
+
+function revokeObjectUrl(url: string): void {
+  if (typeof URL !== "undefined" && typeof URL.revokeObjectURL === "function") {
+    URL.revokeObjectURL(url);
+  }
+}
+
 export function ChatPage(): ReactElement {
   const user = useUserStore((s) => s.user);
   const setBalance = useUserStore((s) => s.setBalance);
@@ -52,6 +62,7 @@ export function ChatPage(): ReactElement {
   const setError = useChatStore((s) => s.setError);
 
   const abortRef = useRef<AbortController | null>(null);
+  const trackedObjectUrlsRef = useRef<Set<string>>(new Set());
 
   const attachmentCost = useMemo(
     () =>
@@ -63,6 +74,42 @@ export function ChatPage(): ReactElement {
   );
 
   const estimatedCost = estimateMessageCost(mode) + attachmentCost;
+
+  const activeObjectUrls = useMemo(() => {
+    const urls = new Set<string>();
+    for (const att of pendingAttachments) {
+      if (isObjectUrl(att.previewUrl)) urls.add(att.previewUrl);
+    }
+    for (const message of messages) {
+      for (const att of message.attachments ?? []) {
+        if (isObjectUrl(att.url)) urls.add(att.url);
+      }
+    }
+    return urls;
+  }, [messages, pendingAttachments]);
+
+  useEffect(() => {
+    const tracked = trackedObjectUrlsRef.current;
+    for (const url of activeObjectUrls) {
+      tracked.add(url);
+    }
+    for (const url of Array.from(tracked)) {
+      if (!activeObjectUrls.has(url)) {
+        revokeObjectUrl(url);
+        tracked.delete(url);
+      }
+    }
+  }, [activeObjectUrls]);
+
+  useEffect(() => {
+    const tracked = trackedObjectUrlsRef.current;
+    return () => {
+      for (const url of tracked) {
+        revokeObjectUrl(url);
+      }
+      tracked.clear();
+    };
+  }, []);
 
   const submitText = useCallback(async () => {
     const prompt = draft.trim();
