@@ -31,6 +31,7 @@ from typing import Any
 
 import pytest
 
+from app.models.video_job import VideoJob
 from app.services.composio import (
     ComposioTransientError,
     MockComposioClient,
@@ -52,6 +53,7 @@ from app.services.video_generation import (
     TARIFF_LONG,
     TARIFF_MEDIUM,
     TARIFF_SHORT,
+    VIDEO_JOB_MAX_PROVIDER_ATTEMPTS,
     InvalidPromptError,
     InvalidReferenceImageError,
     InvalidTariffError,
@@ -755,6 +757,122 @@ async def test_poll_failure_refunds(
     refreshed = await service.poll(created.id)
     assert refreshed.status == "refunded"
     assert fake_tokens.balances[42] == 1_000  # refunded
+
+
+@pytest.mark.asyncio
+async def test_submit_missing_provider_job_id_refunds_without_status_poll(
+    fake_session: _FakeSession,
+    composio_mock: MockComposioClient,
+    fake_tokens: _FakeTokenService,
+) -> None:
+    async def handler(invocation: ToolInvocation) -> ToolResult:
+        if invocation.params.get("action") == "submit":
+            return ToolResult(
+                tool=invocation.tool,
+                successful=True,
+                data={"status": "queued"},
+            )
+        return ToolResult(
+            tool=invocation.tool,
+            successful=True,
+            data={"status": "queued"},
+        )
+
+    composio_mock.set_handler("video_gen", handler)
+    service = _build_service(fake_session, composio_mock, fake_tokens)
+
+    view = await service.create(
+        user_id=42, prompt="x", tariff=TARIFF_SHORT, request_id="r-missing-job-id"
+    )
+    assert view.status == "refunded"
+    assert view.provider_job_id is None
+    assert view.error_code == "missing_provider_job_id"
+    assert len(composio_mock.calls) == 1
+    assert len(fake_tokens.refunds) == 1
+    assert fake_tokens.balances[42] == 1_000
+
+    after_terminal = await service.poll(view.id)
+    assert after_terminal.status == "refunded"
+    assert len(composio_mock.calls) == 1
+    assert len(fake_tokens.refunds) == 1
+
+
+@pytest.mark.asyncio
+async def test_poll_legacy_missing_provider_job_id_refunds_without_empty_provider_call(
+    fake_session: _FakeSession,
+    composio_mock: MockComposioClient,
+    fake_tokens: _FakeTokenService,
+) -> None:
+    spend = await fake_tokens.spend(
+        user_id=42,
+        amount=TARIFF_COST[TARIFF_SHORT],
+        service=SERVICE_TYPE,
+        response_status="pending",
+    )
+    job = VideoJob(
+        user_id=42,
+        request_id="legacy-missing-job-id",
+        tariff=TARIFF_SHORT,
+        duration_s=TARIFF_DURATION[TARIFF_SHORT],
+        prompt="x",
+        status="queued",
+        tokens_cost=TARIFF_COST[TARIFF_SHORT],
+        transaction_id=spend.transaction_id,
+        usage_log_id=spend.usage_log_id,
+        attempts=1,
+    )
+    fake_session.add(job)
+    await fake_session.flush()
+    service = _build_service(fake_session, composio_mock, fake_tokens)
+
+    refreshed = await service.poll(job.id)
+    assert refreshed.status == "refunded"
+    assert refreshed.error_code == "missing_provider_job_id"
+    assert composio_mock.calls == []
+    assert len(fake_tokens.refunds) == 1
+    assert fake_tokens.balances[42] == 1_000
+
+
+@pytest.mark.asyncio
+async def test_poll_repeated_composio_errors_eventually_refunds_once(
+    fake_session: _FakeSession,
+    composio_mock: MockComposioClient,
+    fake_tokens: _FakeTokenService,
+) -> None:
+    async def handler(invocation: ToolInvocation) -> ToolResult:
+        if invocation.params.get("action") == "submit":
+            return ToolResult(
+                tool=invocation.tool,
+                successful=True,
+                data={"job_id": "prov-stuck", "status": "queued"},
+            )
+        raise ComposioTransientError("upstream still down")
+
+    composio_mock.set_handler("video_gen", handler)
+    service = _build_service(fake_session, composio_mock, fake_tokens)
+
+    created = await service.create(
+        user_id=42, prompt="x", tariff=TARIFF_MEDIUM, request_id="r-stuck-poll"
+    )
+    assert created.status == "queued"
+
+    refreshed = created
+    for _ in range(VIDEO_JOB_MAX_PROVIDER_ATTEMPTS + 2):
+        refreshed = await service.poll(created.id)
+
+    assert refreshed.status == "refunded"
+    assert refreshed.error_code == "poll_attempts_exhausted"
+    assert refreshed.attempts == VIDEO_JOB_MAX_PROVIDER_ATTEMPTS
+    assert "upstream still down" in (refreshed.error_message or "")
+    assert len(fake_tokens.refunds) == 1
+    assert fake_tokens.balances[42] == 1_000
+    assert len(composio_mock.calls) == VIDEO_JOB_MAX_PROVIDER_ATTEMPTS
+
+    calls_after_terminal = len(composio_mock.calls)
+    after_terminal = await service.poll(created.id)
+    assert after_terminal.status == "refunded"
+    assert len(fake_tokens.refunds) == 1
+    assert len(composio_mock.calls) == calls_after_terminal
 
 
 @pytest.mark.asyncio
