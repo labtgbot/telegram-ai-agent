@@ -14,6 +14,7 @@ from typing import Any
 import httpx
 import pytest
 
+from app.core.metrics import composio_timeout_without_response_total
 from app.services.composio import (
     SERVICE_TYPE_TO_TOOL,
     ComposioAuthError,
@@ -230,6 +231,67 @@ async def test_invoke_retries_on_network_error() -> None:
 
     assert len(calls) == 2
     assert result.attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_invoke_retries_on_timeout_by_default_for_pollable_calls() -> None:
+    calls: list[int] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            raise httpx.ReadTimeout("read timed out", request=request)
+        return httpx.Response(200, json={"successful": True, "data": {"status": "queued"}})
+
+    client = _make_http_client(handler, max_retries=3, backoff_base=0.0)
+    try:
+        result = await client.invoke_for_service(
+            "video",
+            {"action": "status", "job_id": "provider-1"},
+            metadata={"phase": "poll"},
+        )
+    finally:
+        await client.aclose()
+
+    assert len(calls) == 2
+    assert result.attempts == 2
+    assert result.data == {"status": "queued"}
+
+
+@pytest.mark.asyncio
+async def test_invoke_can_disable_transient_retries_for_non_idempotent_submit() -> None:
+    composio_timeout_without_response_total._metrics.clear()
+    calls: list[int] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        raise httpx.ReadTimeout("read timed out", request=request)
+
+    sleeps: list[float] = []
+    client = _make_http_client(handler, max_retries=3, backoff_base=0.0, sleeps=sleeps)
+    try:
+        with pytest.raises(ComposioTransientError) as exc:
+            await client.invoke_for_service(
+                "video",
+                {"action": "submit", "prompt": "make a clip"},
+                request_id="req-submit",
+                metadata={"phase": "submit"},
+                retry_transient_errors=False,
+            )
+    finally:
+        await client.aclose()
+
+    assert calls == [1]
+    assert sleeps == []
+    assert exc.value.attempts == 1
+    assert (
+        composio_timeout_without_response_total.labels(
+            service="video",
+            phase="submit",
+        )._value.get()
+        == 1
+    )
+    composio_timeout_without_response_total._metrics.clear()
 
 
 @pytest.mark.asyncio

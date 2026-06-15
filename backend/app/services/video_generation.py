@@ -695,6 +695,7 @@ class VideoGenerationService:
                     "app_user_id": str(user_id),
                     "phase": "submit",
                 },
+                retry_transient_errors=False,
             )
         except ComposioError as exc:
             logger.warning(

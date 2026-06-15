@@ -11,6 +11,11 @@ Transient failures (``ComposioTransientError``) are retried up to
 
     delay_n = min(backoff_base * 2 ** (n - 1), backoff_max)
 
+Callers that issue non-idempotent operations can opt out with
+``retry_transient_errors=False``.  This is important for submit-style
+provider calls where a read timeout may hide a successful provider-side
+execution.
+
 Non-transient errors (``ComposioInvalidToolError``,
 :class:`ComposioAuthError`, 4xx other than 408/429) bypass the retry
 loop.  ``asyncio.CancelledError`` is propagated immediately so a
@@ -22,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from contextlib import suppress
 from typing import Any, Protocol, runtime_checkable
 
 import httpx
@@ -61,6 +67,7 @@ class ComposioClient(Protocol):
         service_type: str | None = None,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        retry_transient_errors: bool = True,
     ) -> ToolResult: ...
 
     async def invoke_for_service(
@@ -72,6 +79,7 @@ class ComposioClient(Protocol):
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         overrides: dict[str, str] | None = None,
+        retry_transient_errors: bool = True,
     ) -> ToolResult: ...
 
     async def aclose(self) -> None: ...
@@ -131,6 +139,7 @@ class HttpComposioClient:
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         overrides: dict[str, str] | None = None,
+        retry_transient_errors: bool = True,
     ) -> ToolResult:
         """Resolve ``service_type`` and call :meth:`invoke`."""
         tool = resolve_tool(service_type, overrides=overrides)
@@ -141,6 +150,7 @@ class HttpComposioClient:
             service_type=service_type,
             request_id=request_id,
             metadata=metadata,
+            retry_transient_errors=retry_transient_errors,
         )
 
     async def invoke(
@@ -152,6 +162,7 @@ class HttpComposioClient:
         service_type: str | None = None,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        retry_transient_errors: bool = True,
     ) -> ToolResult:
         if not tool or not tool.strip():
             raise ComposioInvalidToolError("tool is required")
@@ -162,11 +173,14 @@ class HttpComposioClient:
             user_id=user_id or self._default_user_id or None,
             request_id=request_id,
             metadata=dict(metadata or {}),
+            retry_transient_errors=retry_transient_errors,
         )
 
         last_error: Exception | None = None
+        attempts_made = 0
         started = time.monotonic()
         for attempt in range(1, self._max_retries + 1):
+            attempts_made = attempt
             try:
                 response = await self._http.post(
                     "/api/v3/tools/execute",
@@ -177,16 +191,23 @@ class HttpComposioClient:
                 last_error = ComposioTransientError(
                     f"composio request timed out: {exc}", attempts=attempt
                 )
+                if not retry_transient_errors:
+                    self._record_timeout_without_response(invocation, attempt)
+                    break
             except httpx.HTTPError as exc:
                 last_error = ComposioTransientError(
                     f"composio network error: {exc}", attempts=attempt
                 )
+                if not retry_transient_errors:
+                    break
             else:
                 if response.status_code in _TRANSIENT_STATUS:
                     last_error = ComposioTransientError(
                         f"composio returned {response.status_code}",
                         attempts=attempt,
                     )
+                    if not retry_transient_errors:
+                        break
                 elif response.status_code in (401, 403):
                     raise ComposioAuthError(
                         f"composio auth failed: {response.status_code} {response.text[:200]}"
@@ -209,8 +230,31 @@ class HttpComposioClient:
 
         assert last_error is not None
         if isinstance(last_error, ComposioTransientError):
-            last_error.attempts = self._max_retries
+            last_error.attempts = attempts_made
         raise last_error
+
+    def _record_timeout_without_response(
+        self,
+        invocation: ToolInvocation,
+        attempt: int,
+    ) -> None:
+        phase = str(invocation.metadata.get("phase") or "unknown")
+        logger.warning(
+            "composio.timeout_without_response",
+            tool=invocation.tool,
+            service_type=invocation.service_type,
+            phase=phase,
+            request_id=invocation.request_id,
+            attempts=attempt,
+            retry_transient_errors=False,
+        )
+        with suppress(Exception):
+            from app.core.metrics import observe_composio_timeout_without_response
+
+            observe_composio_timeout_without_response(
+                service=invocation.service_type,
+                phase=phase,
+            )
 
     def _build_payload(self, invocation: ToolInvocation) -> dict[str, Any]:
         payload: dict[str, Any] = {

@@ -27,6 +27,7 @@ class ToolInvocation:
     user_id: str | None = None
     request_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    retry_transient_errors: bool = True
 
 
 @dataclass(frozen=True)
