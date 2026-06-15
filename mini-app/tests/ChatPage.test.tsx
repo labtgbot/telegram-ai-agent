@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 
@@ -11,6 +11,10 @@ import type * as ChatApiModule from "@/services/chatApi";
 
 const originalCreateObjectURL = URL.createObjectURL;
 const originalRevokeObjectURL = URL.revokeObjectURL;
+
+const streamTextGenerationMock = vi.hoisted(() =>
+  vi.fn<(request: SendMessageRequest, handlers: StreamHandlers) => Promise<void>>(),
+);
 
 vi.mock("react-virtuoso", () => ({
   Virtuoso: ({
@@ -28,26 +32,36 @@ vi.mock("@/services/chatApi", async (importOriginal) => {
   const actual = (await importOriginal()) as typeof ChatApiModule;
   return {
     ...actual,
-    streamTextGeneration: vi.fn(async (_request: SendMessageRequest, handlers: StreamHandlers) => {
-      handlers.onStart?.("req-1");
-      handlers.onDelta?.("Hello");
-      handlers.onFinal?.({
-        event: "final",
-        text: "Hello",
-        tokens_spent: 1,
-        new_balance: 41,
-        mode: "basic",
-        request_id: "req-1",
-        thread_id: "thread-1",
-      });
-    }),
+    streamTextGeneration: streamTextGenerationMock,
   };
 });
+
+function makeAbortError(): Error {
+  const error = new Error("Aborted");
+  error.name = "AbortError";
+  return error;
+}
 
 describe("ChatPage", () => {
   let objectUrlSequence = 0;
 
   beforeEach(() => {
+    streamTextGenerationMock.mockReset();
+    streamTextGenerationMock.mockImplementation(
+      async (_request: SendMessageRequest, handlers: StreamHandlers) => {
+        handlers.onStart?.("req-1");
+        handlers.onDelta?.("Hello");
+        handlers.onFinal?.({
+          event: "final",
+          text: "Hello",
+          tokens_spent: 1,
+          new_balance: 41,
+          mode: "basic",
+          request_id: "req-1",
+          thread_id: "thread-1",
+        });
+      },
+    );
     objectUrlSequence = 0;
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
@@ -97,6 +111,66 @@ describe("ChatPage", () => {
     await userEvent.click(screen.getByTestId("chat-send"));
 
     await waitFor(() => expect(useUserStore.getState().balance).toBe(41));
+  });
+
+  it("aborts the active text stream on unmount", async () => {
+    let signal: AbortSignal | undefined;
+    streamTextGenerationMock.mockImplementationOnce(
+      (request: SendMessageRequest, handlers: StreamHandlers) => {
+        signal = request.signal;
+        handlers.onStart?.("req-1");
+        return new Promise<void>((_resolve, reject) => {
+          request.signal?.addEventListener("abort", () => reject(makeAbortError()), {
+            once: true,
+          });
+        });
+      },
+    );
+
+    const { unmount } = render(<ChatPage />);
+
+    await userEvent.type(screen.getByTestId("chat-input"), "hello");
+    await userEvent.click(screen.getByTestId("chat-send"));
+
+    await waitFor(() => expect(signal).toBeDefined());
+    expect(signal?.aborted).toBe(false);
+
+    unmount();
+
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("aborts the previous text stream before starting a new one", async () => {
+    const signals: AbortSignal[] = [];
+    streamTextGenerationMock.mockImplementation(
+      (request: SendMessageRequest, handlers: StreamHandlers) => {
+        if (!request.signal) throw new Error("Expected stream AbortSignal");
+        signals.push(request.signal);
+        handlers.onStart?.(`req-${signals.length}`);
+        return new Promise<void>((_resolve, reject) => {
+          request.signal?.addEventListener("abort", () => reject(makeAbortError()), {
+            once: true,
+          });
+        });
+      },
+    );
+
+    render(<ChatPage />);
+
+    await userEvent.type(screen.getByTestId("chat-input"), "first");
+    await userEvent.click(screen.getByTestId("chat-send"));
+    await waitFor(() => expect(signals).toHaveLength(1));
+
+    act(() => {
+      useChatStore.getState().setSending(false);
+      useChatStore.getState().setDraft("second");
+    });
+
+    await userEvent.click(screen.getByTestId("chat-send"));
+    await waitFor(() => expect(signals).toHaveLength(2));
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
   });
 
   it("revokes the object URL when a selected attachment is removed", async () => {
