@@ -100,9 +100,8 @@ class HandlerContext:
     inline-button taps.  The dispatcher fills exactly one of them.
 
     ``composio`` is optional so legacy call sites and tests that only
-    exercise Phase 1 handlers don't need to wire a mock client; the
-    handlers that need it (``/image``) raise a friendly error when it's
-    missing.
+    exercise Phase 1 handlers don't need to wire a mock client; generation
+    handlers raise a friendly error when it's missing.
     """
 
     update: dict[str, Any]
@@ -400,15 +399,15 @@ async def handle_image(ctx: HandlerContext) -> None:
         )
         return
 
-    if not await _consume_generation_rate_limit(ctx, user=user, action=ACTION_IMAGE):
-        return
-
     if ctx.composio is None:
         logger.error("bot.image.composio_unconfigured", user_id=user.id)
         await ctx.client.send_message(
             ctx.chat_id,
             "Image generation is temporarily unavailable. Please try again later.",
         )
+        return
+
+    if not await _consume_generation_rate_limit(ctx, user=user, action=ACTION_IMAGE):
         return
 
     service = ImageGenerationService(ctx.session, ctx.composio)
@@ -564,15 +563,15 @@ async def handle_video(ctx: HandlerContext) -> None:
         )
         return
 
-    if not await _consume_generation_rate_limit(ctx, user=user, action=ACTION_VIDEO):
-        return
-
     if ctx.composio is None:
         logger.error("bot.video.composio_unconfigured", user_id=user.id)
         await ctx.client.send_message(
             ctx.chat_id,
             "Video generation is temporarily unavailable. Please try again later.",
         )
+        return
+
+    if not await _consume_generation_rate_limit(ctx, user=user, action=ACTION_VIDEO):
         return
 
     service = VideoGenerationService(ctx.session, ctx.composio)
@@ -735,15 +734,15 @@ async def _run_text_mode(ctx: HandlerContext, *, mode: str, label: str) -> None:
         )
         return
 
-    if not await _consume_generation_rate_limit(ctx, user=user, action=ACTION_TEXT):
-        return
-
     if ctx.composio is None:
         logger.error("bot.text.composio_unconfigured", user_id=user.id, mode=mode)
         await ctx.client.send_message(
             ctx.chat_id,
             "AI chat is temporarily unavailable. Please try again later.",
         )
+        return
+
+    if not await _consume_generation_rate_limit(ctx, user=user, action=ACTION_TEXT):
         return
 
     history = _build_chat_history(ctx.session, user)
