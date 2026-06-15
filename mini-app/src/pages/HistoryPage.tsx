@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
@@ -54,6 +54,7 @@ export function HistoryPage(): ReactElement {
   const [data, setData] = useState<UsageHistoryPage | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const filterOptions = useMemo<ReadonlyArray<{ value: FilterValue; label: string }>>(
     () => [
@@ -66,27 +67,37 @@ export function HistoryPage(): ReactElement {
     [t],
   );
 
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await userApi.getUsageHistory({
-        page,
-        limit: PAGE_SIZE,
-        ...(filter !== "all" ? { service_type: filter } : {}),
-      });
-      setData(result);
-    } catch {
-      setError(t("history.error"));
-      setData(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [page, filter, t]);
-
   useEffect(() => {
+    let ignore = false;
+
+    const load = async (): Promise<void> => {
+      setLoading(true);
+      setError(null);
+      try {
+        const result = await userApi.getUsageHistory({
+          page,
+          limit: PAGE_SIZE,
+          ...(filter !== "all" ? { service_type: filter } : {}),
+        });
+        if (ignore) return;
+        setData(result);
+      } catch {
+        if (ignore) return;
+        setError(t("history.error"));
+        setData(null);
+      } finally {
+        if (!ignore) {
+          setLoading(false);
+        }
+      }
+    };
+
     void load();
-  }, [load]);
+
+    return () => {
+      ignore = true;
+    };
+  }, [page, filter, reloadKey, t]);
 
   const handleFilterChange = (value: FilterValue): void => {
     setFilter(value);
@@ -120,7 +131,7 @@ export function HistoryPage(): ReactElement {
             {error}
           </p>
           <div className="mt-3">
-            <Button variant="secondary" onClick={() => void load()}>
+            <Button variant="secondary" onClick={() => setReloadKey((current) => current + 1)}>
               {t("history.retry")}
             </Button>
           </div>
