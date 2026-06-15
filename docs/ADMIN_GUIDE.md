@@ -172,8 +172,9 @@ the **History** tab with delivery / read counts.
   non-admin requests.
 - **Rate limits** — per-tariff RPS and per-day budgets
   (`admin_settings.rate_limits.*`).
-- **Composio config** — toggle Gemini / Claude / GPT tool-routes,
-  short-circuit a broken provider.
+- **Composio config** — enable Composio tool slugs and tune non-secret
+  routing/options (`tool_overrides`, `tool_options`). Credentials stay
+  in env/secrets and are rejected by the API.
 - **Admins** — list, invite, deactivate, reset TOTP for other admins.
 - **Daily bonus** — see §3 below.
 

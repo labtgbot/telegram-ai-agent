@@ -40,16 +40,27 @@ export interface RateLimitsUpdatePayload {
 
 // -------------------------------------------------------------------- composio
 
+export interface ComposioToolOptions {
+  enabled?: boolean;
+  timeout_seconds?: number;
+  max_retries?: number;
+}
+
+export interface ComposioConfig {
+  tool_overrides?: Record<string, string>;
+  tool_options?: Record<string, ComposioToolOptions>;
+}
+
 export interface ComposioState {
   enabled_tools: string[];
-  config: Record<string, unknown>;
+  config: ComposioConfig;
   updated_at: string | null;
   updated_by: number | null;
 }
 
 export interface ComposioUpdatePayload {
   enabled_tools: string[];
-  config?: Record<string, unknown> | null;
+  config?: ComposioConfig | null;
 }
 
 // ----------------------------------------------------------------- admin users

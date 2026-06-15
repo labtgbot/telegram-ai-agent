@@ -20,6 +20,7 @@ admin that authored the change and the change timestamp.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -32,6 +33,7 @@ from app.core.logging import get_logger
 from app.models.admin_audit_log import AdminAuditLog
 from app.models.admin_setting import AdminSetting
 from app.models.user import User
+from app.services.composio.tools import SERVICE_TYPE_TO_TOOL, SUPPORTED_TOOLKITS
 from app.services.rate_limit_config import (
     ADMIN_SETTING_KEY as RATE_LIMITS_KEY,
 )
@@ -60,6 +62,13 @@ MAX_LIMIT = 200
 MAX_MAINTENANCE_MESSAGE_LEN = 2000
 MAX_COMPOSIO_TOOL_LEN = 64
 MAX_COMPOSIO_TOOLS = 200
+MAX_COMPOSIO_TIMEOUT_SECONDS = 300.0
+MAX_COMPOSIO_RETRIES = 10
+
+COMPOSIO_CONFIG_ALLOWED_KEYS: frozenset[str] = frozenset({"tool_overrides", "tool_options"})
+COMPOSIO_TOOL_OPTION_ALLOWED_KEYS: frozenset[str] = frozenset(
+    {"enabled", "timeout_seconds", "max_retries"}
+)
 
 # Roles a super-admin can assign through the CRM. ``user`` stays assignable so
 # admin access can be revoked with the same audited role-change workflow, while
@@ -363,6 +372,225 @@ async def update_rate_limits(
 # ============================================================ composio config
 
 
+def _invalid_composio_config(message: str, *, strict: bool) -> None:
+    if strict:
+        raise InvalidSettingPayloadError(message)
+
+
+def _clean_composio_tool_slug(
+    value: Any,
+    *,
+    field: str,
+    strict: bool,
+) -> str | None:
+    if not isinstance(value, str):
+        _invalid_composio_config(f"{field} must be a string", strict=strict)
+        return None
+    slug = value.strip()
+    if not slug:
+        _invalid_composio_config(f"{field} is required", strict=strict)
+        return None
+    if len(slug) > MAX_COMPOSIO_TOOL_LEN:
+        _invalid_composio_config(
+            f"{field} exceeds {MAX_COMPOSIO_TOOL_LEN} characters",
+            strict=strict,
+        )
+        return None
+    return slug
+
+
+def _coerce_composio_timeout(value: Any, *, field: str, strict: bool) -> float | None:
+    if isinstance(value, bool):
+        _invalid_composio_config(f"{field} must be a number", strict=strict)
+        return None
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError) as exc:
+        if strict:
+            raise InvalidSettingPayloadError(f"{field} must be a number") from exc
+        return None
+    if timeout <= 0 or timeout > MAX_COMPOSIO_TIMEOUT_SECONDS:
+        _invalid_composio_config(
+            f"{field} must be between 0 and {MAX_COMPOSIO_TIMEOUT_SECONDS}",
+            strict=strict,
+        )
+        return None
+    return timeout
+
+
+def _coerce_composio_retries(value: Any, *, field: str, strict: bool) -> int | None:
+    if isinstance(value, bool):
+        _invalid_composio_config(f"{field} must be an integer", strict=strict)
+        return None
+    try:
+        retries = int(value)
+    except (TypeError, ValueError) as exc:
+        if strict:
+            raise InvalidSettingPayloadError(f"{field} must be an integer") from exc
+        return None
+    if retries < 1 or retries > MAX_COMPOSIO_RETRIES:
+        _invalid_composio_config(
+            f"{field} must be between 1 and {MAX_COMPOSIO_RETRIES}",
+            strict=strict,
+        )
+        return None
+    return retries
+
+
+def _clean_composio_tool_overrides(raw: Any, *, strict: bool) -> dict[str, str] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        _invalid_composio_config("config.tool_overrides must be a mapping", strict=strict)
+        return None
+
+    cleaned: dict[str, str] = {}
+    for raw_service_type, raw_tool in raw.items():
+        if not isinstance(raw_service_type, str):
+            _invalid_composio_config(
+                "config.tool_overrides keys must be service_type strings",
+                strict=strict,
+            )
+            continue
+        service_type = raw_service_type.strip().lower()
+        if service_type not in SERVICE_TYPE_TO_TOOL:
+            _invalid_composio_config(
+                f"unsupported Composio service_type {raw_service_type!r}",
+                strict=strict,
+            )
+            continue
+        tool = _clean_composio_tool_slug(
+            raw_tool,
+            field=f"config.tool_overrides[{service_type!r}]",
+            strict=strict,
+        )
+        if tool is None:
+            continue
+        if tool not in SUPPORTED_TOOLKITS:
+            _invalid_composio_config(
+                f"unsupported Composio toolkit {tool!r}",
+                strict=strict,
+            )
+            continue
+        cleaned[service_type] = tool
+    return cleaned or None
+
+
+def _clean_composio_tool_options(
+    raw: Any,
+    *,
+    strict: bool,
+) -> dict[str, dict[str, Any]] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        _invalid_composio_config("config.tool_options must be a mapping", strict=strict)
+        return None
+
+    cleaned: dict[str, dict[str, Any]] = {}
+    for raw_tool, raw_options in raw.items():
+        tool = _clean_composio_tool_slug(
+            raw_tool,
+            field="config.tool_options key",
+            strict=strict,
+        )
+        if tool is None:
+            continue
+        if tool not in SUPPORTED_TOOLKITS:
+            _invalid_composio_config(
+                f"unsupported Composio toolkit {tool!r}",
+                strict=strict,
+            )
+            continue
+        if not isinstance(raw_options, Mapping):
+            _invalid_composio_config(
+                f"config.tool_options[{tool!r}] must be a mapping",
+                strict=strict,
+            )
+            continue
+
+        unknown = sorted(
+            str(key)
+            for key in raw_options
+            if not isinstance(key, str) or key not in COMPOSIO_TOOL_OPTION_ALLOWED_KEYS
+        )
+        if unknown:
+            _invalid_composio_config(
+                "unsupported Composio tool option(s) for "
+                f"{tool}: {', '.join(unknown)}; allowed fields: "
+                f"{', '.join(sorted(COMPOSIO_TOOL_OPTION_ALLOWED_KEYS))}",
+                strict=strict,
+            )
+
+        options: dict[str, Any] = {}
+        if isinstance(raw_options.get("enabled"), bool):
+            options["enabled"] = raw_options["enabled"]
+        elif "enabled" in raw_options:
+            _invalid_composio_config(
+                f"config.tool_options[{tool!r}].enabled must be a boolean",
+                strict=strict,
+            )
+
+        if "timeout_seconds" in raw_options:
+            timeout = _coerce_composio_timeout(
+                raw_options["timeout_seconds"],
+                field=f"config.tool_options[{tool!r}].timeout_seconds",
+                strict=strict,
+            )
+            if timeout is not None:
+                options["timeout_seconds"] = timeout
+
+        if "max_retries" in raw_options:
+            retries = _coerce_composio_retries(
+                raw_options["max_retries"],
+                field=f"config.tool_options[{tool!r}].max_retries",
+                strict=strict,
+            )
+            if retries is not None:
+                options["max_retries"] = retries
+
+        if options:
+            cleaned[tool] = options
+    return cleaned or None
+
+
+def _clean_composio_config(config: Any, *, strict: bool) -> dict[str, Any]:
+    if config is None:
+        return {}
+    if not isinstance(config, Mapping):
+        _invalid_composio_config("config must be a mapping", strict=strict)
+        return {}
+
+    unknown = sorted(
+        str(key)
+        for key in config
+        if not isinstance(key, str) or key not in COMPOSIO_CONFIG_ALLOWED_KEYS
+    )
+    if unknown:
+        _invalid_composio_config(
+            "unsupported Composio config field(s): "
+            f"{', '.join(unknown)}; allowed fields: "
+            f"{', '.join(sorted(COMPOSIO_CONFIG_ALLOWED_KEYS))}",
+            strict=strict,
+        )
+
+    cleaned: dict[str, Any] = {}
+    overrides = _clean_composio_tool_overrides(
+        config.get("tool_overrides"),
+        strict=strict,
+    )
+    if overrides:
+        cleaned["tool_overrides"] = overrides
+
+    options = _clean_composio_tool_options(
+        config.get("tool_options"),
+        strict=strict,
+    )
+    if options:
+        cleaned["tool_options"] = options
+    return cleaned
+
+
 def _coerce_composio(raw: Any) -> ComposioState:
     if not isinstance(raw, dict):
         return ComposioState(enabled_tools=[], config={}, updated_at=None, updated_by=None)
@@ -371,9 +599,7 @@ def _coerce_composio(raw: Any) -> ComposioState:
         tools = []
     cleaned_tools = [str(t).strip() for t in tools if isinstance(t, str | int) and str(t).strip()]
     cleaned_tools = list(dict.fromkeys(cleaned_tools))  # dedupe, preserve order
-    config = raw.get("config")
-    if not isinstance(config, dict):
-        config = {}
+    config = _clean_composio_config(raw.get("config"), strict=False)
     return ComposioState(
         enabled_tools=cleaned_tools,
         config=config,
@@ -395,7 +621,10 @@ async def get_composio_state(session: AsyncSession) -> ComposioState:
     )
 
 
-def _validate_composio(enabled_tools: list[str], config: dict[str, Any] | None) -> tuple[list[str], dict[str, Any]]:
+def _validate_composio(
+    enabled_tools: list[str],
+    config: dict[str, Any] | None,
+) -> tuple[list[str], dict[str, Any]]:
     if not isinstance(enabled_tools, list):
         raise InvalidSettingPayloadError("enabled_tools must be a list of strings")
     cleaned: list[str] = []
@@ -422,7 +651,7 @@ def _validate_composio(enabled_tools: list[str], config: dict[str, Any] | None) 
         config = {}
     if not isinstance(config, dict):
         raise InvalidSettingPayloadError("config must be a mapping")
-    return cleaned, config
+    return cleaned, _clean_composio_config(config, strict=True)
 
 
 async def update_composio_state(

@@ -7,6 +7,7 @@ writes and request metadata propagation.
 Mirrors the build-app pattern from ``test_admin_broadcasts_endpoints.py``
 to keep the suite fast and PostgreSQL-free.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -120,6 +121,7 @@ def build_app(monkeypatch, admin_super):
         ComposioState,
         InvalidSettingPayloadError,
         MaintenanceState,
+        _validate_composio,
     )
 
     session = FakeSession()
@@ -137,15 +139,27 @@ def build_app(monkeypatch, admin_super):
         "composio": ComposioState(enabled_tools=[], config={}, updated_at=None, updated_by=None),
         "admins": {
             1: AdminUserRow(
-                id=1, telegram_id=100, username="super", first_name="S", last_name=None,
-                role="super_admin", is_banned=False,
-                last_login_at=None, last_active_at=None,
+                id=1,
+                telegram_id=100,
+                username="super",
+                first_name="S",
+                last_name=None,
+                role="super_admin",
+                is_banned=False,
+                last_login_at=None,
+                last_active_at=None,
                 created_at=datetime.now(UTC),
             ),
             2: AdminUserRow(
-                id=2, telegram_id=200, username="support", first_name="P", last_name=None,
-                role="support_admin", is_banned=False,
-                last_login_at=None, last_active_at=None,
+                id=2,
+                telegram_id=200,
+                username="support",
+                first_name="P",
+                last_name=None,
+                role="support_admin",
+                is_banned=False,
+                last_login_at=None,
+                last_active_at=None,
                 created_at=datetime.now(UTC),
             ),
         },
@@ -158,7 +172,9 @@ def build_app(monkeypatch, admin_super):
     async def fake_get_maintenance(_session):
         return state["maintenance"]
 
-    async def fake_update_maintenance(_session, *, admin, enabled, message=None, ip_address=None, user_agent=None):
+    async def fake_update_maintenance(
+        _session, *, admin, enabled, message=None, ip_address=None, user_agent=None
+    ):
         if message is not None and len(message) > 2000:
             raise InvalidSettingPayloadError("message exceeds 2000 characters")
         next_state = MaintenanceState(
@@ -183,7 +199,9 @@ def build_app(monkeypatch, admin_super):
     async def fake_get_rate_limits(_session):
         return state["rate_limits"]
 
-    async def fake_update_rate_limits(_session, *, admin, overrides, ip_address=None, user_agent=None):
+    async def fake_update_rate_limits(
+        _session, *, admin, overrides, ip_address=None, user_agent=None
+    ):
         if overrides is not None and not isinstance(overrides, dict):
             raise InvalidSettingPayloadError("overrides must be mapping")
         if overrides is not None:
@@ -215,23 +233,13 @@ def build_app(monkeypatch, admin_super):
     async def fake_get_composio(_session):
         return state["composio"]
 
-    async def fake_update_composio(_session, *, admin, enabled_tools, config=None, ip_address=None, user_agent=None):
-        if not isinstance(enabled_tools, list):
-            raise InvalidSettingPayloadError("enabled_tools must be a list")
-        cleaned: list[str] = []
-        for tool in enabled_tools:
-            if not isinstance(tool, str):
-                raise InvalidSettingPayloadError("enabled_tools must contain strings")
-            slug = tool.strip()
-            if slug and slug not in cleaned:
-                cleaned.append(slug)
-        if config is None:
-            config = {}
-        if not isinstance(config, dict):
-            raise InvalidSettingPayloadError("config must be mapping")
+    async def fake_update_composio(
+        _session, *, admin, enabled_tools, config=None, ip_address=None, user_agent=None
+    ):
+        cleaned, cleaned_config = _validate_composio(enabled_tools, config)
         next_state = ComposioState(
             enabled_tools=cleaned,
-            config=config,
+            config=cleaned_config,
             updated_at=datetime.now(UTC),
             updated_by=admin.id,
         )
@@ -256,9 +264,13 @@ def build_app(monkeypatch, admin_super):
             items = [u for u in items if u.role == role]
         total = len(items)
         items = items[(page - 1) * limit : page * limit]
-        return _FakeAdminPage(items=items, total=total, page=page, limit=limit, has_more=(page * limit) < total)
+        return _FakeAdminPage(
+            items=items, total=total, page=page, limit=limit, has_more=(page * limit) < total
+        )
 
-    async def fake_update_admin_role(_session, *, admin, target_user_id, role, ip_address=None, user_agent=None):
+    async def fake_update_admin_role(
+        _session, *, admin, target_user_id, role, ip_address=None, user_agent=None
+    ):
         if role not in {"super_admin", "support_admin", "analyst", "user"}:
             raise InvalidSettingPayloadError(f"unsupported role={role!r}")
         row = state["admins"].get(target_user_id)
@@ -424,17 +436,11 @@ async def test_update_rate_limits_persists_and_audits(build_app) -> None:
     async with await _client(build_app["app"]) as c:
         resp = await c.put(
             "/api/v1/admin/system/rate-limits",
-            json={
-                "overrides": {
-                    "free": {"messages": {"limit": 30, "window_seconds": 60}}
-                }
-            },
+            json={"overrides": {"free": {"messages": {"limit": 30, "window_seconds": 60}}}},
         )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["overrides"] == {
-        "free": {"messages": {"limit": 30, "window_seconds": 60}}
-    }
+    assert body["overrides"] == {"free": {"messages": {"limit": 30, "window_seconds": 60}}}
     assert build_app["audit_log"][-1].action == "settings.rate_limits.update"
 
 
@@ -443,11 +449,7 @@ async def test_update_rate_limits_rejects_negative_values(build_app) -> None:
     async with await _client(build_app["app"]) as c:
         resp = await c.put(
             "/api/v1/admin/system/rate-limits",
-            json={
-                "overrides": {
-                    "free": {"messages": {"limit": -1, "window_seconds": 60}}
-                }
-            },
+            json={"overrides": {"free": {"messages": {"limit": -1, "window_seconds": 60}}}},
         )
     assert resp.status_code == 400
     assert "positive" in resp.json()["detail"]
@@ -490,19 +492,52 @@ async def test_get_composio_state_returns_default(build_app) -> None:
 
 @pytest.mark.asyncio
 async def test_update_composio_persists_and_audits(build_app) -> None:
+    config = {
+        "tool_overrides": {"text": "claude"},
+        "tool_options": {
+            "gemini": {
+                "enabled": True,
+                "timeout_seconds": 20.0,
+                "max_retries": 2,
+            }
+        },
+    }
     async with await _client(build_app["app"]) as c:
         resp = await c.put(
             "/api/v1/admin/system/composio",
             json={
                 "enabled_tools": ["gmail.send_email", " github.create_issue ", "gmail.send_email"],
-                "config": {"gmail.send_email": {"signature": "Cheers"}},
+                "config": config,
             },
         )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     # duplicate dropped, whitespace trimmed
     assert body["enabled_tools"] == ["gmail.send_email", "github.create_issue"]
+    assert body["config"] == config
     assert build_app["audit_log"][-1].action == "settings.composio.update"
+
+
+@pytest.mark.asyncio
+async def test_update_composio_rejects_unknown_config_field(build_app) -> None:
+    async with await _client(build_app["app"]) as c:
+        resp = await c.put(
+            "/api/v1/admin/system/composio",
+            json={
+                "enabled_tools": ["gemini"],
+                "config": {"api_key": "secret"},
+            },
+        )
+    assert resp.status_code == 400
+    assert "unsupported Composio config field" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_get_composio_forbidden_for_analyst(build_app, admin_analyst) -> None:
+    build_app["current_admin"] = admin_analyst
+    async with await _client(build_app["app"]) as c:
+        resp = await c.get("/api/v1/admin/system/composio")
+    assert resp.status_code == 403
 
 
 @pytest.mark.asyncio
