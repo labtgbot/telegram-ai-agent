@@ -5,7 +5,8 @@ Production runs these modules directly from the backend image:
 * ``python -m app.workers.broadcast --loop`` for broadcast delivery;
 * ``python -m app.workers.video_polling --loop`` for video job polling;
 * Kubernetes CronJobs or compose loops for subscriptions, account deletion,
-  daily analytics, and token usage partition maintenance.
+  admin refresh-session cleanup, daily analytics, and token usage partition
+  maintenance.
 
 The submodules are exposed lazily via PEP 562 ``__getattr__`` to avoid
 pulling the full ``app.bot`` / ``app.services.payments`` graph at package
@@ -21,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.workers.account_deletion import process_due_deletions
+    from app.workers.admin_refresh_sessions import run_admin_refresh_session_cleanup
     from app.workers.broadcast import run_broadcast_loop, run_broadcast_pass
     from app.workers.daily_analytics import run_daily_analytics
     from app.workers.subscriptions import run_subscription_renewals
@@ -34,6 +36,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "process_due_deletions",
+    "run_admin_refresh_session_cleanup",
     "run_broadcast_loop",
     "run_broadcast_pass",
     "run_daily_analytics",
@@ -45,6 +48,10 @@ __all__ = [
 
 _LAZY: dict[str, tuple[str, str]] = {
     "process_due_deletions": ("app.workers.account_deletion", "process_due_deletions"),
+    "run_admin_refresh_session_cleanup": (
+        "app.workers.admin_refresh_sessions",
+        "run_admin_refresh_session_cleanup",
+    ),
     "run_broadcast_loop": ("app.workers.broadcast", "run_broadcast_loop"),
     "run_broadcast_pass": ("app.workers.broadcast", "run_broadcast_pass"),
     "run_daily_analytics": ("app.workers.daily_analytics", "run_daily_analytics"),

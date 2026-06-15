@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import delete, select
@@ -12,6 +13,7 @@ from app.auth.jwt import create_refresh_token, decode_token
 from app.models import AdminRefreshSession, User
 from app.services.admin_refresh_sessions import (
     RefreshSessionReusedError,
+    cleanup_refresh_sessions,
     create_refresh_session,
     hash_refresh_jti,
     revoke_refresh_session,
@@ -135,6 +137,69 @@ async def test_revoke_refresh_session_invalidates_active_session(db_session):
     assert revoked is True
     assert refresh_session.revoked_at is not None
     assert refresh_session.revocation_reason == "logout"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_refresh_sessions_deletes_expired_and_old_revoked_rows(db_session):
+    user = await _make_admin(db_session, telegram_id=7_211_005)
+    now = datetime(2026, 6, 15, 12, tzinfo=UTC)
+    old_revoked_at = now - timedelta(days=8)
+    recent_revoked_at = now - timedelta(hours=1)
+
+    rows = [
+        AdminRefreshSession(
+            user_id=user.id,
+            jti_hash="expired-active",
+            role=user.role,
+            issued_at=now - timedelta(days=8),
+            expires_at=now - timedelta(seconds=1),
+        ),
+        AdminRefreshSession(
+            user_id=user.id,
+            jti_hash="old-revoked",
+            role=user.role,
+            issued_at=now - timedelta(days=8),
+            expires_at=now + timedelta(days=1),
+            revoked_at=old_revoked_at,
+            revocation_reason="logout",
+        ),
+        AdminRefreshSession(
+            user_id=user.id,
+            jti_hash="recent-revoked",
+            role=user.role,
+            issued_at=now - timedelta(hours=2),
+            expires_at=now + timedelta(days=1),
+            revoked_at=recent_revoked_at,
+            revocation_reason="logout",
+        ),
+        AdminRefreshSession(
+            user_id=user.id,
+            jti_hash="active",
+            role=user.role,
+            issued_at=now,
+            expires_at=now + timedelta(days=1),
+        ),
+    ]
+    db_session.add_all(rows)
+    await db_session.flush()
+
+    deleted = await cleanup_refresh_sessions(
+        db_session,
+        now=now,
+        revoked_retention_seconds=7 * 24 * 60 * 60,
+    )
+
+    assert deleted == 2
+    remaining = (
+        (
+            await db_session.execute(
+                select(AdminRefreshSession.jti_hash).where(AdminRefreshSession.user_id == user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert set(remaining) == {"recent-revoked", "active"}
 
 
 @pytest.mark.asyncio

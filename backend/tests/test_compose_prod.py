@@ -262,6 +262,7 @@ def test_prod_compose_hardening_contract(tmp_path: Path) -> None:
     expected_scheduled_worker_modules = {
         "subscriptions-worker": "app.workers.subscriptions",
         "account-deletion-worker": "app.workers.account_deletion",
+        "admin-refresh-sessions-worker": "app.workers.admin_refresh_sessions",
         "daily-analytics-worker": "app.workers.daily_analytics",
         "token-usage-partitions-worker": "app.workers.token_usage_partitions",
     }

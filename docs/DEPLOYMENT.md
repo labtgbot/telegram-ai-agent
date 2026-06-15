@@ -396,8 +396,8 @@ Check:
 - `backgroundWorkers.enabled=true`; keep `broadcast` and `video-polling`
   as one-replica Deployments unless row-claiming semantics are changed.
 - `backgroundWorkers.cronJobs.*.schedule` matches the operational window:
-  account deletion and subscriptions run shortly after midnight UTC, daily
-  analytics runs after them.
+  admin refresh-session cleanup, account deletion, and subscriptions run
+  shortly after midnight UTC, daily analytics runs after them.
 - `backup.enabled` and S3 settings are correct for production.
 - `backend.rollout.enabled=true` only after Argo Rollouts is installed.
 
@@ -465,6 +465,7 @@ Background worker contract:
 | `broadcast-worker` | Deployment | `python -m app.workers.broadcast --loop` | continuous |
 | `video-polling-worker` | Deployment | `python -m app.workers.video_polling --loop --interval-s 10` | continuous |
 | `account-deletion-worker` | CronJob | `python -m app.workers.account_deletion` | `30 0 * * *` |
+| `admin-refresh-sessions-worker` | CronJob | `python -m app.workers.admin_refresh_sessions` | `20 0 * * *` |
 | `subscriptions-worker` | CronJob | `python -m app.workers.subscriptions` | `45 0 * * *` |
 | `daily-analytics-worker` | CronJob | `python -m app.workers.daily_analytics` | `10 1 * * *` |
 | `token-usage-partitions` | CronJob | `python -m app.workers.token_usage_partitions --months-ahead N` | `0 3 25 * *` |
@@ -741,6 +742,7 @@ docker compose -f docker/compose.prod.yml --env-file .env.prod logs -f broadcast
 docker compose -f docker/compose.prod.yml --env-file .env.prod logs -f video-polling-worker
 docker compose -f docker/compose.prod.yml --env-file .env.prod logs -f subscriptions-worker
 docker compose -f docker/compose.prod.yml --env-file .env.prod logs -f account-deletion-worker
+docker compose -f docker/compose.prod.yml --env-file .env.prod logs -f admin-refresh-sessions-worker
 docker compose -f docker/compose.prod.yml --env-file .env.prod logs -f daily-analytics-worker
 docker compose -f docker/compose.prod.yml --env-file .env.prod logs -f token-usage-partitions-worker
 docker compose -f docker/compose.prod.yml --env-file .env.prod logs -f caddy
@@ -758,7 +760,8 @@ backend image:
 ```bash
 docker compose -f docker/compose.prod.yml --env-file .env.prod up -d --force-recreate \
   broadcast-worker video-polling-worker subscriptions-worker \
-  account-deletion-worker daily-analytics-worker token-usage-partitions-worker
+  account-deletion-worker admin-refresh-sessions-worker daily-analytics-worker \
+  token-usage-partitions-worker
 ```
 
 Stop stack:
@@ -781,7 +784,7 @@ When using a managed platform, create equivalent services:
 | Backend | Python container | Port `8000`, health path `/api/v1/health/live`, env from section 5. |
 | Broadcast worker | Python container | `python -m app.workers.broadcast --loop`, same env as backend. |
 | Video polling worker | Python container | `python -m app.workers.video_polling --loop --interval-s 10`, same env as backend. |
-| Daily workers | Scheduler / cron-capable job runner | Run `app.workers.subscriptions`, `app.workers.account_deletion`, `app.workers.daily_analytics`, and `app.workers.token_usage_partitions` on their schedules. |
+| Daily workers | Scheduler / cron-capable job runner | Run `app.workers.subscriptions`, `app.workers.account_deletion`, `app.workers.admin_refresh_sessions`, `app.workers.daily_analytics`, and `app.workers.token_usage_partitions` on their schedules. |
 | Mini App | Static site or nginx container | Build with `VITE_API_BASE_URL=https://bot.example.com/api/v1` or `/api/v1`. |
 | Admin | Next.js container | Port `3001`, `API_BASE_URL`, `NEXT_PUBLIC_API_BASE_URL`, admin JWT env. |
 | PostgreSQL | Managed DB | `DATABASE_URL` with asyncpg scheme. |
