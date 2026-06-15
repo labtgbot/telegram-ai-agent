@@ -19,6 +19,13 @@ const _en = {
     no: "No",
     requiredEmail: "Please enter a valid email",
   },
+  errors: {
+    appTitle: "Something went wrong",
+    appBody: "Reload the Mini App and try again.",
+    routeTitle: "Could not load this screen",
+    routeBody: "Reload the Mini App to fetch the screen again.",
+    reload: "Reload app",
+  },
   home: {
     welcome: "Welcome",
     greeting: "Hi {name} — this is the Telegram AI Agent Mini App skeleton.",

@@ -55,3 +55,47 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+.error-fallback {
+  display: flex;
+  min-height: 60vh;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+
+.error-fallback__panel {
+  width: 100%;
+  max-width: 24rem;
+  border: 1px solid var(--tg-color-section-separator);
+  border-radius: var(--tg-radius);
+  background-color: var(--tg-color-section-bg);
+  padding: 1.25rem;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.error-fallback__title {
+  margin: 0;
+  color: var(--tg-color-text);
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+}
+
+.error-fallback__message {
+  margin: 0.5rem 0 0;
+  color: var(--tg-color-hint);
+  font-size: 0.875rem;
+  line-height: 1.5rem;
+}
+
+.error-fallback__button {
+  width: 100%;
+  min-height: 2.5rem;
+  margin-top: 1rem;
+  border: 0;
+  border-radius: var(--tg-radius);
+  background-color: var(--tg-color-button);
+  color: var(--tg-color-button-text);
+}

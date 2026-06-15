@@ -5,6 +5,7 @@ import { createBrowserRouter } from "react-router-dom";
 import { AppLayout } from "@/layouts/AppLayout";
 import { ChatPage } from "@/pages/ChatPage";
 import { RouteFallback } from "@/components/RouteFallback";
+import { RouteErrorElement } from "@/components/RouteErrorElement";
 import {
   BalancePage,
   HistoryPage,
@@ -28,6 +29,7 @@ export const router = createBrowserRouter([
   {
     path: "/",
     element: <AppLayout />,
+    errorElement: <RouteErrorElement />,
     children: [
       { index: true, element: <ChatPage /> },
       { path: "home", element: withSuspense(<HomePage />) },
