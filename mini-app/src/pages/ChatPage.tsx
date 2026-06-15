@@ -39,6 +39,15 @@ function revokeObjectUrl(url: string): void {
   }
 }
 
+function isAbortError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "name" in err &&
+    (err as { name?: unknown }).name === "AbortError"
+  );
+}
+
 export function ChatPage(): ReactElement {
   const user = useUserStore((s) => s.user);
   const setBalance = useUserStore((s) => s.setBalance);
@@ -62,7 +71,13 @@ export function ChatPage(): ReactElement {
   const setError = useChatStore((s) => s.setError);
 
   const abortRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
   const trackedObjectUrlsRef = useRef<Set<string>>(new Set());
+
+  const abortActiveStream = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+  }, []);
 
   const attachmentCost = useMemo(
     () =>
@@ -102,19 +117,24 @@ export function ChatPage(): ReactElement {
   }, [activeObjectUrls]);
 
   useEffect(() => {
+    mountedRef.current = true;
     const tracked = trackedObjectUrlsRef.current;
     return () => {
+      mountedRef.current = false;
+      abortActiveStream();
+      setSending(false);
       for (const url of tracked) {
         revokeObjectUrl(url);
       }
       tracked.clear();
     };
-  }, []);
+  }, [abortActiveStream, setSending]);
 
   const submitText = useCallback(async () => {
     const prompt = draft.trim();
     if (!prompt && pendingAttachments.length === 0) return;
 
+    abortActiveStream();
     setError(null);
 
     // Carry pending attachments into the user message bubble so they show up
@@ -167,11 +187,13 @@ export function ChatPage(): ReactElement {
           fileSizeBytes: att.sizeBytes,
           question: prompt || undefined,
         });
+        if (!mountedRef.current) return;
         documentContexts.push(
           `Document "${att.name}" (${result.format}) summary:\n${result.summary ?? result.text.slice(0, 2000)}`,
         );
         setBalance(result.new_balance);
       } catch (err) {
+        if (!mountedRef.current) return;
         documentContexts.push(`Document "${att.name}" could not be analysed.`);
         console.warn("document analysis failed", err);
       }
@@ -180,8 +202,11 @@ export function ChatPage(): ReactElement {
     const effectivePrompt =
       documentContexts.length > 0 ? `${prompt}\n\n---\n${documentContexts.join("\n\n")}` : prompt;
 
+    if (!mountedRef.current) return;
     const controller = new AbortController();
     abortRef.current = controller;
+    const isActiveStream = () =>
+      mountedRef.current && abortRef.current === controller && !controller.signal.aborted;
 
     try {
       await streamTextGeneration(
@@ -192,9 +217,14 @@ export function ChatPage(): ReactElement {
           signal: controller.signal,
         },
         {
-          onStart: () => patchMessage(assistantId, { status: "streaming" }),
-          onDelta: (delta) => appendAssistantDelta(assistantId, delta),
+          onStart: () => {
+            if (isActiveStream()) patchMessage(assistantId, { status: "streaming" });
+          },
+          onDelta: (delta) => {
+            if (isActiveStream()) appendAssistantDelta(assistantId, delta);
+          },
           onFinal: (final) => {
+            if (!isActiveStream()) return;
             setBalance(final.new_balance);
             finalizeMessage(assistantId, {
               status: "complete",
@@ -203,6 +233,7 @@ export function ChatPage(): ReactElement {
             });
           },
           onError: (e) => {
+            if (!isActiveStream()) return;
             finalizeMessage(assistantId, { status: "error" });
             patchMessage(assistantId, { error: e.message });
             setError(e.message);
@@ -210,15 +241,19 @@ export function ChatPage(): ReactElement {
         },
       );
     } catch (err) {
+      if (isAbortError(err) || !isActiveStream()) return;
       const message = err instanceof Error ? err.message : "Unknown error";
       finalizeMessage(assistantId, { status: "error" });
       patchMessage(assistantId, { error: message });
       setError(message);
     } finally {
-      setSending(false);
-      abortRef.current = null;
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        if (mountedRef.current) setSending(false);
+      }
     }
   }, [
+    abortActiveStream,
     appendAssistantDelta,
     appendMessage,
     clearAttachments,
