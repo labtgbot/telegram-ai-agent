@@ -97,6 +97,13 @@ class _Store:
     next_id: int = 1
 
 
+@dataclass
+class _SessionControls:
+    commit_errors: list[Exception] = field(default_factory=list)
+    commits: int = 0
+    rollbacks: int = 0
+
+
 class _FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
@@ -135,12 +142,17 @@ def captured_requests() -> list[dict[str, Any]]:
 
 
 @pytest.fixture
+def session_controls() -> _SessionControls:
+    return _SessionControls()
+
+
+@pytest.fixture
 def settings() -> _FakeSettings:
     return _FakeSettings()
 
 
 @pytest.fixture
-def build_app(monkeypatch, store, fake_redis, captured_requests, settings):
+def build_app(monkeypatch, store, fake_redis, captured_requests, settings, session_controls):
     """Wire the FastAPI app with stubbed DB/Telegram so the webhook is callable."""
     from app.api.v1 import bot as bot_route
     from app.auth import dependencies as deps
@@ -184,9 +196,13 @@ def build_app(monkeypatch, store, fake_redis, captured_requests, settings):
             return None
 
         async def commit(self):
+            session_controls.commits += 1
+            if session_controls.commit_errors:
+                raise session_controls.commit_errors.pop(0)
             return None
 
         async def rollback(self):
+            session_controls.rollbacks += 1
             return None
 
         def add(self, obj):  # noqa: ANN001 — duck-typed Transaction record
@@ -418,6 +434,68 @@ async def test_webhook_short_circuits_duplicate_update_id(
     assert fake_redis.ttls == {
         "bot:webhook:update:1": settings.telegram_update_idempotency_ttl_seconds
     }
+
+
+@pytest.mark.asyncio
+async def test_webhook_releases_update_id_claim_after_commit_failure(
+    build_app, fake_redis, session_controls, monkeypatch
+) -> None:
+    app, _, _ = build_app
+
+    from app.api.v1 import bot as bot_route
+
+    dispatched: list[int] = []
+
+    async def fake_dispatch(update: dict[str, Any], **_kwargs: Any) -> None:
+        dispatched.append(int(update["update_id"]))
+
+    monkeypatch.setattr(bot_route, "dispatch_update", fake_dispatch)
+    session_controls.commit_errors.append(RuntimeError("database temporarily unavailable"))
+
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "supersecret"}
+    update = _start_update(33)
+    async with await _client(app) as c:
+        first = await c.post(WEBHOOK_PATH, json=update, headers=headers)
+        second = await c.post(WEBHOOK_PATH, json=update, headers=headers)
+
+    assert first.status_code == 500
+    assert second.status_code == 200
+    assert dispatched == [1, 1]
+    assert session_controls.commits == 2
+    assert session_controls.rollbacks == 1
+    assert fake_redis.values == {"bot:webhook:update:1": "1"}
+
+
+@pytest.mark.asyncio
+async def test_webhook_releases_update_id_claim_after_dispatch_failure(
+    build_app, fake_redis, session_controls, monkeypatch
+) -> None:
+    app, _, _ = build_app
+
+    from app.api.v1 import bot as bot_route
+
+    dispatched: list[int] = []
+
+    async def flaky_dispatch(update: dict[str, Any], **_kwargs: Any) -> None:
+        if not dispatched:
+            dispatched.append(int(update["update_id"]))
+            raise RuntimeError("dispatcher temporarily unavailable")
+        dispatched.append(int(update["update_id"]))
+
+    monkeypatch.setattr(bot_route, "dispatch_update", flaky_dispatch)
+
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "supersecret"}
+    update = _start_update(33)
+    async with await _client(app) as c:
+        first = await c.post(WEBHOOK_PATH, json=update, headers=headers)
+        second = await c.post(WEBHOOK_PATH, json=update, headers=headers)
+
+    assert first.status_code == 500
+    assert second.status_code == 200
+    assert dispatched == [1, 1]
+    assert session_controls.commits == 1
+    assert session_controls.rollbacks == 1
+    assert fake_redis.values == {"bot:webhook:update:1": "1"}
 
 
 @pytest.mark.asyncio
