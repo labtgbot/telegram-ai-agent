@@ -338,6 +338,23 @@ async def test_get_maintenance_state_returns_default(build_app) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/admin/system/maintenance",
+        "/api/v1/admin/system/rate-limits",
+        "/api/v1/admin/system/composio",
+        "/api/v1/admin/system/admins",
+    ],
+)
+async def test_system_reads_forbidden_for_support_admin(build_app, admin_support, path) -> None:
+    build_app["current_admin"] = admin_support
+    async with await _client(build_app["app"]) as c:
+        resp = await c.get(path)
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_update_maintenance_state_audits(build_app) -> None:
     async with await _client(build_app["app"]) as c:
         resp = await c.put(
@@ -370,6 +387,17 @@ async def test_update_maintenance_rejects_long_message(build_app) -> None:
 @pytest.mark.asyncio
 async def test_maintenance_forbidden_for_analyst(build_app, admin_analyst) -> None:
     build_app["current_admin"] = admin_analyst
+    async with await _client(build_app["app"]) as c:
+        resp = await c.put(
+            "/api/v1/admin/system/maintenance",
+            json={"enabled": True},
+        )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_maintenance_forbidden_for_support_admin(build_app, admin_support) -> None:
+    build_app["current_admin"] = admin_support
     async with await _client(build_app["app"]) as c:
         resp = await c.put(
             "/api/v1/admin/system/maintenance",
@@ -480,6 +508,17 @@ async def test_update_composio_persists_and_audits(build_app) -> None:
 @pytest.mark.asyncio
 async def test_composio_forbidden_for_analyst(build_app, admin_analyst) -> None:
     build_app["current_admin"] = admin_analyst
+    async with await _client(build_app["app"]) as c:
+        resp = await c.put(
+            "/api/v1/admin/system/composio",
+            json={"enabled_tools": []},
+        )
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_composio_forbidden_for_support_admin(build_app, admin_support) -> None:
+    build_app["current_admin"] = admin_support
     async with await _client(build_app["app"]) as c:
         resp = await c.put(
             "/api/v1/admin/system/composio",

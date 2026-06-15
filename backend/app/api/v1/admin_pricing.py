@@ -12,8 +12,8 @@ Exposes three routes under ``/api/v1/admin/pricing``:
   filtered to ``action="pricing.update"``, so the UI can render a
   "who / when / what changed" feed without inventing a second table.
 
-Reads require ``analyst`` (``get_current_admin``); writes require
-``super_admin`` because pricing directly affects revenue.
+Reads and writes require ``super_admin`` because pricing directly affects
+revenue and mirrors the dashboard ``/pricing`` page gate.
 """
 from __future__ import annotations
 
@@ -23,8 +23,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
-from app.auth.dependencies import SessionDep, get_current_admin
-from app.auth.rbac import Role, require_role
+from app.auth.admin_access import ADMIN_PRICING_MIN_ROLE
+from app.auth.dependencies import SessionDep
+from app.auth.rbac import require_role
 from app.core.client_ip import resolve_client_ip
 from app.core.logging import get_logger
 from app.models.admin_audit_log import AdminAuditLog
@@ -207,7 +208,7 @@ async def _commit_or_500(session: Any) -> None:
 )
 async def get_pricing_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_PRICING_MIN_ROLE))],
 ) -> PricingConfigResponse:
     config = await load_pricing_config(session)
     return PricingConfigResponse.from_config(config)
@@ -222,7 +223,7 @@ async def update_pricing_endpoint(
     payload: PricingUpdatePayload,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPER_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_PRICING_MIN_ROLE))],
 ) -> PricingUpdateResponse:
     ip, ua = _request_meta(request)
     request_obj = PricingUpdateRequest(
@@ -271,7 +272,7 @@ async def update_pricing_endpoint(
 )
 async def get_pricing_history_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_PRICING_MIN_ROLE))],
     page: Annotated[int, Query(ge=1, le=10_000)] = 1,
     limit: Annotated[int, Query(ge=1, le=200)] = 25,
 ) -> PricingHistoryResponse:

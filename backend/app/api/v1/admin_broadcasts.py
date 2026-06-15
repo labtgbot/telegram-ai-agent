@@ -5,11 +5,11 @@ Endpoints under ``/admin/broadcasts``:
 * ``POST /admin/broadcasts`` — compose a new broadcast (immediate or
   scheduled).  Requires ``support_admin`` or higher.
 * ``POST /admin/broadcasts/preview-audience`` — count the audience for a
-  given selector before pushing the send button.  ``analyst`` and up.
-* ``GET  /admin/broadcasts`` — paginated list of campaigns.  ``analyst``.
-* ``GET  /admin/broadcasts/{id}`` — single campaign metadata.  ``analyst``.
+  given selector before pushing the send button.  ``support_admin`` and up.
+* ``GET  /admin/broadcasts`` — paginated list of campaigns.  ``support_admin``.
+* ``GET  /admin/broadcasts/{id}`` — single campaign metadata.  ``support_admin``.
 * ``GET  /admin/broadcasts/{id}/stats`` — delivery counter breakdown
-  driven by ``broadcast_recipients`` aggregations.  ``analyst``.
+  driven by ``broadcast_recipients`` aggregations.  ``support_admin``.
 * ``POST /admin/broadcasts/{id}/cancel`` — stop a draft / scheduled /
   in-progress campaign.  ``support_admin`` and up.
 
@@ -32,8 +32,9 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field
 
-from app.auth.dependencies import SessionDep, get_current_admin
-from app.auth.rbac import Role, require_role
+from app.auth.admin_access import ADMIN_BROADCASTS_MIN_ROLE
+from app.auth.dependencies import SessionDep
+from app.auth.rbac import require_role
 from app.core.client_ip import resolve_client_ip
 from app.core.logging import get_logger
 from app.models.broadcast import (
@@ -225,7 +226,7 @@ def _draft_from_request(payload: BroadcastCreateRequest) -> BroadcastDraft:
 async def preview_audience_endpoint(
     payload: PreviewAudienceRequest,
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_BROADCASTS_MIN_ROLE))],
 ) -> PreviewAudienceResponse:
     try:
         total = await preview_audience(
@@ -251,7 +252,7 @@ async def create_broadcast_endpoint(
     payload: BroadcastCreateRequest,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_BROADCASTS_MIN_ROLE))],
 ) -> BroadcastResponse:
     ip, ua = _request_meta(request)
     draft = _draft_from_request(payload)
@@ -285,7 +286,7 @@ async def create_broadcast_endpoint(
 )
 async def list_broadcasts_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_BROADCASTS_MIN_ROLE))],
     status_filter: Annotated[str | None, Query(alias="status", max_length=32)] = None,
     page: Annotated[int, Query(ge=1, le=10_000)] = 1,
     limit: Annotated[int, Query(ge=1, le=200)] = 25,
@@ -305,7 +306,7 @@ async def list_broadcasts_endpoint(
     summary="List supported audience selectors",
 )
 async def list_audiences_endpoint(
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_BROADCASTS_MIN_ROLE))],
 ) -> dict[str, list[str]]:
     return {"audiences": list(BROADCAST_AUDIENCES)}
 
@@ -318,7 +319,7 @@ async def list_audiences_endpoint(
 async def get_broadcast_endpoint(
     broadcast_id: int,
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_BROADCASTS_MIN_ROLE))],
 ) -> BroadcastResponse:
     try:
         broadcast = await get_broadcast(session, broadcast_id)
@@ -338,7 +339,7 @@ async def get_broadcast_endpoint(
 async def get_broadcast_stats_endpoint(
     broadcast_id: int,
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_BROADCASTS_MIN_ROLE))],
 ) -> BroadcastStatsResponse:
     try:
         stats = await get_broadcast_stats(session, broadcast_id)
@@ -369,7 +370,7 @@ async def cancel_broadcast_endpoint(
     broadcast_id: int,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_BROADCASTS_MIN_ROLE))],
 ) -> BroadcastResponse:
     ip, ua = _request_meta(request)
     try:

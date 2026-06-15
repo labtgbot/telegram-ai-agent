@@ -493,6 +493,24 @@ async def test_list_users_rejects_pagination_overflow(build_app) -> None:
     assert resp.status_code == 422  # max=200 hard cap
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/admin/users",
+        "/api/v1/admin/users/export.csv",
+        "/api/v1/admin/users/10",
+        "/api/v1/admin/users/10/stats",
+    ],
+)
+async def test_users_reads_forbidden_for_analyst(build_app, admin_analyst, path) -> None:
+    state = build_app
+    state["current_admin"]["user"] = admin_analyst
+    async with await _client(state["app"]) as c:
+        resp = await c.get(path)
+    assert resp.status_code == 403
+
+
 # ---------------------------------------------------------------- /admin/users/{id}
 
 

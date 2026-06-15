@@ -1,8 +1,8 @@
 """Admin User Management endpoints (Phase 3, issue #25).
 
-All routes require an authenticated admin (``analyst`` or higher); ban,
-unban, add-tokens, direct-message and audit-log reads require
-``support_admin`` or higher.
+All routes require ``support_admin`` or higher.  This mirrors the admin
+dashboard ``/users`` page gate because list, detail and CSV endpoints expose
+PII and recent transaction data.
 Every mutation writes an :class:`app.models.admin_audit_log.AdminAuditLog`
 row in the same transaction, so a rolled-back request never leaves a
 "phantom" log entry behind.
@@ -24,8 +24,9 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from app.api.v1.bot import BotClientDep
-from app.auth.dependencies import SessionDep, get_current_admin
-from app.auth.rbac import Role, require_role
+from app.auth.admin_access import ADMIN_USERS_MIN_ROLE
+from app.auth.dependencies import SessionDep
+from app.auth.rbac import require_role
 from app.bot.client import TelegramApiError
 from app.core.client_ip import resolve_client_ip
 from app.core.logging import get_logger
@@ -265,7 +266,7 @@ async def _commit_or_500(session: Any) -> None:
 )
 async def list_users_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_USERS_MIN_ROLE))],
     search: Annotated[str | None, Query(max_length=200)] = None,
     is_premium: Annotated[bool | None, Query()] = None,
     is_banned: Annotated[bool | None, Query()] = None,
@@ -315,7 +316,7 @@ async def list_users_endpoint(
 async def export_users_csv_endpoint(
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_USERS_MIN_ROLE))],
     search: Annotated[str | None, Query(max_length=200)] = None,
     is_premium: Annotated[bool | None, Query()] = None,
     is_banned: Annotated[bool | None, Query()] = None,
@@ -366,7 +367,7 @@ async def export_users_csv_endpoint(
 async def get_user_endpoint(
     user_id: int,
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_USERS_MIN_ROLE))],
 ) -> AdminUserSummary:
     user = await session.get(User, user_id)
     if user is None:
@@ -385,7 +386,7 @@ async def get_user_endpoint(
 async def get_user_stats_endpoint(
     user_id: int,
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_USERS_MIN_ROLE))],
 ) -> UserStatsResponse:
     try:
         stats = await get_user_stats(session, user_id)
@@ -429,7 +430,7 @@ async def add_tokens_endpoint(
     payload: AddTokensRequest,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_USERS_MIN_ROLE))],
 ) -> AddTokensResponse:
     service = TokenService(session, get_default_balance_cache())
     try:
@@ -485,7 +486,7 @@ async def ban_user_endpoint(
     payload: BanRequest,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_USERS_MIN_ROLE))],
 ) -> AdminUserSummary:
     ip, ua = _request_meta(request)
     try:
@@ -527,7 +528,7 @@ async def unban_user_endpoint(
     user_id: int,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_USERS_MIN_ROLE))],
 ) -> AdminUserSummary:
     ip, ua = _request_meta(request)
     try:
@@ -559,7 +560,7 @@ async def send_message_endpoint(
     request: Request,
     session: SessionDep,
     client: BotClientDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_USERS_MIN_ROLE))],
 ) -> SendMessageResponse:
     user = await session.get(User, user_id)
     if user is None:
@@ -623,7 +624,7 @@ async def send_message_endpoint(
 )
 async def list_audit_log_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_USERS_MIN_ROLE))],
     admin_id: Annotated[int | None, Query()] = None,
     target_user_id: Annotated[int | None, Query()] = None,
     action: Annotated[str | None, Query(max_length=64)] = None,

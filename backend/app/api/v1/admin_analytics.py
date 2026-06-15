@@ -11,7 +11,8 @@ Exposes four read-only routes under ``/api/v1/admin/analytics``:
 * ``GET /export.csv`` — same revenue payload as ``/revenue`` rendered
   as CSV; writes an audit-log row.
 
-All routes are gated by ``get_current_admin`` (``analyst`` and above).
+Read routes are gated to ``analyst`` and above.  CSV export requires
+``support_admin`` because it creates an auditable data extract.
 """
 from __future__ import annotations
 
@@ -23,7 +24,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from app.auth.admin_access import ADMIN_ANALYTICS_EXPORT_MIN_ROLE
 from app.auth.dependencies import SessionDep, get_current_admin
+from app.auth.rbac import require_role
 from app.core.client_ip import resolve_client_ip
 from app.core.logging import get_logger
 from app.models.user import User
@@ -355,7 +358,7 @@ async def get_tokens_endpoint(
 async def export_revenue_csv_endpoint(
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_ANALYTICS_EXPORT_MIN_ROLE))],
     start_date: Annotated[date | None, Query()] = None,
     end_date: Annotated[date | None, Query()] = None,
     group_by: Annotated[str, Query(pattern="^(day|week|month)$")] = "day",

@@ -267,6 +267,11 @@ def admin_analyst() -> FakeUser:
 
 
 @pytest.fixture
+def admin_support() -> FakeUser:
+    return FakeUser(id=3, telegram_id=300, role="support_admin")
+
+
+@pytest.fixture
 def build_app(monkeypatch, admin_analyst):
     """Compose an ASGI app with the admin-analytics router fully stubbed."""
     from app.api.v1 import admin_analytics as router_module
@@ -600,10 +605,11 @@ async def test_tokens_maps_invalid_range_to_400(build_app) -> None:
 
 
 @pytest.mark.asyncio
-async def test_export_csv_returns_attachment_and_audits(build_app) -> None:
+async def test_export_csv_returns_attachment_and_audits(build_app, admin_support) -> None:
     from app.services.analytics import ANALYTICS_AUDIT_EXPORT
 
     state = build_app
+    state["current_admin"]["user"] = admin_support
     async with await _client(state["app"]) as c:
         resp = await c.get(
             "/api/v1/admin/analytics/export.csv",
@@ -643,8 +649,18 @@ async def test_export_csv_returns_attachment_and_audits(build_app) -> None:
 
 
 @pytest.mark.asyncio
-async def test_export_csv_maps_invalid_range_to_400(build_app) -> None:
+async def test_export_csv_forbidden_for_analyst(build_app) -> None:
+    async with await _client(build_app["app"]) as c:
+        resp = await c.get("/api/v1/admin/analytics/export.csv")
+    assert resp.status_code == 403
+    assert build_app["audit_log"] == []
+    assert build_app["session"].committed is False
+
+
+@pytest.mark.asyncio
+async def test_export_csv_maps_invalid_range_to_400(build_app, admin_support) -> None:
     state = build_app
+    state["current_admin"]["user"] = admin_support
     state["raise_revenue"]["err"] = state["InvalidRangeError"]("bad range")
     async with await _client(state["app"]) as c:
         resp = await c.get("/api/v1/admin/analytics/export.csv")
@@ -656,8 +672,9 @@ async def test_export_csv_maps_invalid_range_to_400(build_app) -> None:
 
 
 @pytest.mark.asyncio
-async def test_export_csv_rejects_invalid_group_by_via_regex(build_app) -> None:
+async def test_export_csv_rejects_invalid_group_by_via_regex(build_app, admin_support) -> None:
     state = build_app
+    state["current_admin"]["user"] = admin_support
     async with await _client(state["app"]) as c:
         resp = await c.get(
             "/api/v1/admin/analytics/export.csv",

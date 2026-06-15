@@ -526,6 +526,35 @@ async def test_list_audiences_returns_known_selectors(build_app) -> None:
     assert "custom" in audiences
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("POST", "/api/v1/admin/broadcasts/preview-audience", {"audience": "premium"}),
+        ("GET", "/api/v1/admin/broadcasts", None),
+        ("GET", "/api/v1/admin/broadcasts/audiences", None),
+        ("GET", "/api/v1/admin/broadcasts/1", None),
+        ("GET", "/api/v1/admin/broadcasts/1/stats", None),
+    ],
+)
+async def test_broadcast_reads_forbidden_for_analyst(
+    build_app,
+    admin_analyst,
+    method,
+    path,
+    json_body,
+) -> None:
+    async with await _client(build_app["app"]) as c:
+        await c.post(
+            "/api/v1/admin/broadcasts",
+            json={"text": "seed", "audience": "all"},
+        )
+    build_app["current_admin"] = admin_analyst
+    async with await _client(build_app["app"]) as c:
+        resp = await c.request(method, path, json=json_body)
+    assert resp.status_code == 403
+
+
 # ---------------------------------------------------------------- cancel
 
 

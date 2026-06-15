@@ -11,9 +11,8 @@ Endpoints under ``/admin/system``:
 * ``GET  /admin/system/admins`` — list users with admin-tier roles.
 * ``PUT  /admin/system/admins/{user_id}/role`` — change a user's role.
 
-Reads are open to ``analyst`` and above.  Maintenance/composio writes
-require ``support_admin``; rate-limit and admin-role writes are gated to
-``super_admin`` because they directly shape billing and access control.
+Reads and writes require ``super_admin`` because system settings shape
+billing, external integrations, maintenance state and admin access control.
 Every mutation writes an :class:`AdminAuditLog` row through the service
 layer in the same transaction.
 """
@@ -33,8 +32,9 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field
 
-from app.auth.dependencies import SessionDep, get_current_admin
-from app.auth.rbac import Role, require_role
+from app.auth.admin_access import ADMIN_SYSTEM_MIN_ROLE
+from app.auth.dependencies import SessionDep
+from app.auth.rbac import require_role
 from app.core.client_ip import resolve_client_ip
 from app.core.logging import get_logger
 from app.models.user import User
@@ -116,7 +116,7 @@ class MaintenanceUpdateRequest(BaseModel):
 )
 async def get_maintenance_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_SYSTEM_MIN_ROLE))],
 ) -> MaintenanceResponse:
     state = await get_maintenance_state(session)
     return MaintenanceResponse.from_state(state)
@@ -131,7 +131,7 @@ async def update_maintenance_endpoint(
     payload: MaintenanceUpdateRequest,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_SYSTEM_MIN_ROLE))],
 ) -> MaintenanceResponse:
     ip, ua = _request_meta(request)
     try:
@@ -171,7 +171,7 @@ class RateLimitsUpdateRequest(BaseModel):
 )
 async def get_rate_limits_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_SYSTEM_MIN_ROLE))],
 ) -> RateLimitsResponse:
     data = await get_rate_limits(session)
     return RateLimitsResponse(**data)
@@ -186,7 +186,7 @@ async def update_rate_limits_endpoint(
     payload: RateLimitsUpdateRequest,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPER_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_SYSTEM_MIN_ROLE))],
 ) -> RateLimitsResponse:
     ip, ua = _request_meta(request)
     try:
@@ -234,7 +234,7 @@ class ComposioUpdateRequest(BaseModel):
 )
 async def get_composio_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_SYSTEM_MIN_ROLE))],
 ) -> ComposioResponse:
     state = await get_composio_state(session)
     return ComposioResponse.from_state(state)
@@ -249,7 +249,7 @@ async def update_composio_endpoint(
     payload: ComposioUpdateRequest,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPPORT_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_SYSTEM_MIN_ROLE))],
 ) -> ComposioResponse:
     ip, ua = _request_meta(request)
     try:
@@ -318,7 +318,7 @@ class AdminRoleUpdateRequest(BaseModel):
 )
 async def list_admins_endpoint(
     session: SessionDep,
-    admin: Annotated[User, Depends(get_current_admin)],
+    admin: Annotated[User, Depends(require_role(ADMIN_SYSTEM_MIN_ROLE))],
     role: Annotated[str | None, Query(max_length=32)] = None,
     page: Annotated[int, Query(ge=1, le=10_000)] = 1,
     limit: Annotated[int, Query(ge=1, le=200)] = 25,
@@ -347,7 +347,7 @@ async def update_admin_role_endpoint(
     payload: AdminRoleUpdateRequest,
     request: Request,
     session: SessionDep,
-    admin: Annotated[User, Depends(require_role(Role.SUPER_ADMIN))],
+    admin: Annotated[User, Depends(require_role(ADMIN_SYSTEM_MIN_ROLE))],
 ) -> AdminUserResponse:
     ip, ua = _request_meta(request)
     try:
