@@ -388,6 +388,12 @@ class PaymentService:
         existing = await self._find_completed_by_charge_id(telegram_payment_charge_id)
         if existing is not None:
             user = await self._get_user(existing.user_id)
+            existing_package = get_package(existing.package_name)
+            existing_is_subscription = (
+                existing_package.is_subscription
+                if existing_package is not None
+                else False
+            )
             logger.info(
                 "payment.duplicate_webhook",
                 user_id=user.id,
@@ -404,7 +410,7 @@ class PaymentService:
                 stars_amount=int(existing.stars_amount or 0),
                 package_code=str(existing.package_name or ""),
                 new_balance=int(user.token_balance or 0),
-                is_subscription=is_recurring,
+                is_subscription=existing_is_subscription,
                 already_processed=True,
             )
 
@@ -469,7 +475,7 @@ class PaymentService:
                     stars_amount=int(existing.stars_amount or 0),
                     package_code=str(existing.package_name or ""),
                     new_balance=int(user2.token_balance or 0),
-                    is_subscription=is_recurring,
+                    is_subscription=package.is_subscription,
                     already_processed=True,
                 )
             await token_service._invalidate_balance_cache(user.id)
