@@ -2,6 +2,7 @@ import { jwtVerify, type JWTPayload } from "jose";
 
 import { serverEnv } from "@/lib/env";
 import { isAdminRole, type Role } from "@/lib/auth/roles";
+import { CSRF_COOKIE_NAME } from "@/lib/auth/csrf";
 
 export interface AdminJwtPayload extends JWTPayload {
   sub: string;
@@ -30,6 +31,7 @@ const REFRESH_COOKIE = "admin_refresh_token";
 export const COOKIE_NAMES = {
   access: ACCESS_COOKIE,
   refresh: REFRESH_COOKIE,
+  csrf: CSRF_COOKIE_NAME,
 } as const;
 
 function secretKey(): Uint8Array {

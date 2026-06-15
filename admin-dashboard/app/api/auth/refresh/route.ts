@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
 
 import { clearTokens, persistTokens, readRefreshToken } from "@/lib/auth/cookies";
+import { requireCsrfToken } from "@/lib/auth/csrf-server";
 import { parseTokenPair } from "@/lib/auth/token-pair";
 import { serverEnv } from "@/lib/env";
 
-export async function POST(): Promise<NextResponse> {
+export async function POST(request: Request): Promise<NextResponse> {
+  const csrf = await requireCsrfToken(request);
+  if (csrf) return csrf;
+
   const refresh = await readRefreshToken();
   if (!refresh) {
     return NextResponse.json({ code: "missing_refresh_token" }, { status: 401 });
