@@ -42,7 +42,7 @@ class _Settings:
 
     @property
     def is_development(self) -> bool:
-        return True
+        return self.app_env.lower() in {"development", "dev", "local"}
 
     @property
     def super_admin_ids(self) -> set[int]:
@@ -469,6 +469,29 @@ async def test_admin_login_round_trip_returns_tokens(build_app) -> None:
         )
         assert refreshed.status_code == 200
         assert refreshed.json()["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_admin_login_request_does_not_return_code_outside_dev_when_app_debug_enabled(
+    build_app,
+    fake_settings,
+) -> None:
+    fake_settings.app_env = "production"
+    fake_settings.app_debug = True
+    app, _ = build_app
+
+    async with await _client(app) as c:
+        req = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
+
+    assert req.status_code == 200, req.text
+    assert req.json() == {
+        "delivery": "bot",
+        "ttl_seconds": 60,
+        "code": None,
+    }
 
 
 @pytest.mark.asyncio

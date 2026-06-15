@@ -158,6 +158,20 @@ def test_assert_production_safe_blocks_mock_composio_mode_outside_dev() -> None:
     assert "COMPOSIO_MODE" in str(excinfo.value)
 
 
+def test_assert_production_safe_blocks_app_debug_outside_dev() -> None:
+    config_module = _fresh_config_module()
+    settings = config_module.Settings(
+        app_env="production",
+        app_debug=True,
+        admin_jwt_secret="a-real-long-random-secret-9f8e",
+        telegram_webhook_secret="webhook-secret",
+        composio_api_key="composio-secret",
+    )
+    with pytest.raises(config_module.InsecureDefaultSecretError) as excinfo:
+        settings.assert_production_safe()
+    assert "APP_DEBUG" in str(excinfo.value)
+
+
 def test_assert_production_safe_allows_dev_with_default_secret() -> None:
     config_module = _fresh_config_module()
     for env in ("development", "local", "test", "ci"):

@@ -57,7 +57,7 @@ make seed       # python -m scripts.seed
 | Переменная | Назначение |
 |------------|-----------|
 | `APP_ENV` | `development` / `staging` / `production`. |
-| `APP_DEBUG` | Включает дебаг-режим FastAPI. |
+| `APP_DEBUG` | Включает дебаг-режим FastAPI; допустим только вне production. |
 | `LOG_LEVEL` | `DEBUG` / `INFO` / `WARNING` / `ERROR`. |
 | `LOG_FORMAT` | `json` (prod) или `console` (dev). |
 | `DATABASE_URL` | URL для async SQLAlchemy (asyncpg). |

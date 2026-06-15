@@ -202,7 +202,7 @@ async def _require_admin_candidate(session: AsyncSession, telegram_id: int) -> U
 
 
 def _admin_login_exposes_code(settings: Any) -> bool:
-    return bool(settings.app_debug or settings.is_development)
+    return bool(settings.is_development)
 
 
 def _admin_login_request_response(
