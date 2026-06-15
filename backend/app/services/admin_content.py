@@ -17,6 +17,7 @@ entire surface area in scope.  Each entity follows the same shape:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from html import escape
 from typing import Any
 
 from sqlalchemy import Select, and_, asc, desc, func, or_, select, update
@@ -137,6 +138,24 @@ def _normalise_str(value: str | None, *, max_len: int, field: str, required: boo
     return raw
 
 
+def _normalise_content_text(
+    value: str | None,
+    *,
+    max_len: int,
+    field: str,
+    required: bool = True,
+) -> str | None:
+    raw = _normalise_str(value, max_len=max_len, field=field, required=required)
+    if raw is None:
+        return None
+
+    # Admin-authored content is persisted as text, not trusted HTML.
+    escaped = escape(raw, quote=True)
+    if len(escaped) > max_len:
+        raise InvalidContentPayloadError(f"{field} exceeds {max_len} characters")
+    return escaped
+
+
 def _coerce_pagination(page: int, limit: int) -> tuple[int, int, int]:
     page = max(int(page or 1), 1)
     limit = max(min(int(limit or DEFAULT_LIMIT), MAX_LIMIT), 1)
@@ -217,9 +236,9 @@ async def get_prompt_template(session: AsyncSession, template_id: int) -> Prompt
 
 def _clean_prompt_draft(draft: PromptTemplateDraft) -> PromptTemplateDraft:
     code = _normalise_str(draft.code, max_len=MAX_CODE_LEN, field="code")
-    title = _normalise_str(draft.title, max_len=MAX_TITLE_LEN, field="title")
-    body = _normalise_str(draft.body, max_len=MAX_BODY_LEN, field="body")
-    category = _normalise_str(
+    title = _normalise_content_text(draft.title, max_len=MAX_TITLE_LEN, field="title")
+    body = _normalise_content_text(draft.body, max_len=MAX_BODY_LEN, field="body")
+    category = _normalise_content_text(
         draft.category, max_len=MAX_CATEGORY_LEN, field="category", required=False
     )
     locale = _normalise_str(
@@ -452,9 +471,11 @@ async def get_faq_item(session: AsyncSession, faq_id: int) -> FaqItem:
 
 
 def _clean_faq_draft(draft: FaqItemDraft) -> FaqItemDraft:
-    question = _normalise_str(draft.question, max_len=MAX_QUESTION_LEN, field="question")
-    answer = _normalise_str(draft.answer, max_len=MAX_BODY_LEN, field="answer")
-    category = _normalise_str(
+    question = _normalise_content_text(
+        draft.question, max_len=MAX_QUESTION_LEN, field="question"
+    )
+    answer = _normalise_content_text(draft.answer, max_len=MAX_BODY_LEN, field="answer")
+    category = _normalise_content_text(
         draft.category, max_len=MAX_CATEGORY_LEN, field="category", required=False
     )
     locale = _normalise_str(
@@ -645,8 +666,8 @@ async def get_welcome_message(session: AsyncSession, welcome_id: int) -> Welcome
 
 
 def _clean_welcome_draft(draft: WelcomeMessageDraft) -> WelcomeMessageDraft:
-    name = _normalise_str(draft.name, max_len=MAX_NAME_LEN, field="name")
-    body = _normalise_str(draft.body, max_len=MAX_BODY_LEN, field="body")
+    name = _normalise_content_text(draft.name, max_len=MAX_NAME_LEN, field="name")
+    body = _normalise_content_text(draft.body, max_len=MAX_BODY_LEN, field="body")
     locale = _normalise_str(
         draft.locale, max_len=MAX_LOCALE_LEN, field="locale", required=True
     ) or "en"
