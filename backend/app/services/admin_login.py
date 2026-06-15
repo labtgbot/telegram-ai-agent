@@ -9,8 +9,8 @@ The flow has three steps:
    the response so e2e tests can complete without a bot.
 2. ``verify_admin_login`` — admin posts ``telegram_id`` + ``code`` (and the
    ``totp_code`` if 2FA is enabled).  We compare the hash in constant time,
-   track failed attempts independently from code re-issuance, delete the key,
-   and let the caller mint JWTs.
+   track failed attempts independently from code re-issuance, and consume the
+   key once all required factors pass.
 3. Subsequent JWT refresh uses :func:`app.auth.jwt.decode_token` directly.
 
 Storing the salted SHA-256 hash (rather than the code itself) means a Redis
@@ -111,8 +111,9 @@ async def verify_admin_login(
     secret: str,
     max_attempts: int,
     ttl_seconds: int,
+    consume_on_success: bool = True,
 ) -> None:
-    """Verify a code; on success the stored hash is deleted.
+    """Verify a code; by default the stored hash is deleted on success.
 
     Raises:
         LoginCodeMissingError: No outstanding code for ``telegram_id``.
@@ -139,4 +140,10 @@ async def verify_admin_login(
     if not hmac.compare_digest(stored_str, expected):
         raise LoginCodeInvalidError("code mismatch")
 
-    await redis.delete(_key("hash", telegram_id), attempts_key)
+    if consume_on_success:
+        await consume_admin_login_code(redis, telegram_id=telegram_id)
+
+
+async def consume_admin_login_code(redis: Any, *, telegram_id: int) -> None:
+    """Consume a verified login code and clear its attempt counter."""
+    await redis.delete(_key("hash", telegram_id), _key("attempts", telegram_id))

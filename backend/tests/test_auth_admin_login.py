@@ -9,6 +9,7 @@ from app.services.admin_login import (
     LoginCodeInvalidError,
     LoginCodeMissingError,
     _generate_numeric_code,
+    consume_admin_login_code,
     request_admin_login,
     verify_admin_login,
 )
@@ -88,6 +89,50 @@ async def test_request_then_verify_happy_path() -> None:
         await verify_admin_login(
             redis,
             telegram_id=10,
+            code=code.code,
+            secret="s",
+            max_attempts=5,
+            ttl_seconds=60,
+        )
+
+
+@pytest.mark.asyncio
+async def test_verify_can_defer_code_consumption() -> None:
+    redis = FakeRedis()
+    code = await request_admin_login(
+        redis,
+        telegram_id=1010,
+        secret="s",
+        ttl_seconds=60,
+        code_length=6,
+    )
+
+    await verify_admin_login(
+        redis,
+        telegram_id=1010,
+        code=code.code,
+        secret="s",
+        max_attempts=5,
+        ttl_seconds=60,
+        consume_on_success=False,
+    )
+
+    # Deferred consumption keeps the code available for the remaining factor.
+    await verify_admin_login(
+        redis,
+        telegram_id=1010,
+        code=code.code,
+        secret="s",
+        max_attempts=5,
+        ttl_seconds=60,
+        consume_on_success=False,
+    )
+
+    await consume_admin_login_code(redis, telegram_id=1010)
+    with pytest.raises(LoginCodeMissingError):
+        await verify_admin_login(
+            redis,
+            telegram_id=1010,
             code=code.code,
             secret="s",
             max_attempts=5,
