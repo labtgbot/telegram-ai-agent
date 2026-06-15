@@ -61,8 +61,9 @@ MAX_MAINTENANCE_MESSAGE_LEN = 2000
 MAX_COMPOSIO_TOOL_LEN = 64
 MAX_COMPOSIO_TOOLS = 200
 
-# Roles an admin can assign through the CRM.  ``banned`` and ``user`` are
-# intentionally excluded — those flow through ban/unban, not role flips.
+# Roles a super-admin can assign through the CRM. ``user`` stays assignable so
+# admin access can be revoked with the same audited role-change workflow, while
+# ``banned`` is intentionally excluded and still flows through ban/unban.
 ASSIGNABLE_ROLES: frozenset[str] = frozenset(
     {Role.ANALYST.value, Role.SUPPORT_ADMIN.value, Role.SUPER_ADMIN.value, Role.USER.value}
 )
