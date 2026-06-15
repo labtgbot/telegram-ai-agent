@@ -394,8 +394,8 @@ class TokenService:
             request_params=request_params,
             response_status=response_status,
             processing_time_ms=processing_time_ms,
-            composio_tool=composio_tool,
-            mcp_server=mcp_server,
+            composio_tool=composio_tool[:255] if composio_tool is not None else None,
+            mcp_server=mcp_server[:255] if mcp_server is not None else None,
         )
         self.session.add(usage)
         await self.session.flush()
