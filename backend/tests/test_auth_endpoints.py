@@ -629,20 +629,55 @@ async def test_admin_login_requires_totp_when_enabled(build_app) -> None:
         assert without.status_code == 401
         assert without.json()["detail"] == "totp_required"
 
-        # Re-request a fresh code (previous one was consumed by the failed
-        # verify check that happens *before* the TOTP gate? No — TOTP gate
-        # runs *after* successful verify, so the code is already consumed.
-        req2 = await c.post(
-            "/api/v1/auth/admin/login/request",
-            json={"telegram_id": 42},
-        )
-        code2 = req2.json()["code"]
+        # Missing TOTP must not consume the login code.
         totp_code = pyotp.TOTP(user.totp_secret).now()
         ok = await c.post(
             "/api/v1/auth/admin/login/verify",
-            json={"telegram_id": 42, "code": code2, "totp_code": totp_code},
+            json={"telegram_id": 42, "code": code, "totp_code": totp_code},
         )
         assert ok.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_admin_login_retries_totp_without_reissuing_code(build_app) -> None:
+    app, store = build_app
+    import pyotp
+
+    from app.auth.totp import verify_totp_timecode
+
+    user = store[42]
+    user.totp_enabled = True
+    user.totp_secret = pyotp.random_base32()
+    invalid_totp = next(
+        candidate
+        for candidate in ("000000", "000001", "999999", "123456")
+        if verify_totp_timecode(user.totp_secret, candidate) is None
+    )
+
+    async with await _client(app) as c:
+        req = await c.post(
+            "/api/v1/auth/admin/login/request",
+            json={"telegram_id": 42},
+        )
+        code = req.json()["code"]
+
+        invalid = await c.post(
+            "/api/v1/auth/admin/login/verify",
+            json={"telegram_id": 42, "code": code, "totp_code": invalid_totp},
+        )
+        assert invalid.status_code == 401
+        assert invalid.json()["detail"] == "totp_invalid"
+
+        ok = await c.post(
+            "/api/v1/auth/admin/login/verify",
+            json={
+                "telegram_id": 42,
+                "code": code,
+                "totp_code": pyotp.TOTP(user.totp_secret).now(),
+            },
+        )
+
+    assert ok.status_code == 200, ok.text
 
 
 @pytest.mark.asyncio

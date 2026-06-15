@@ -44,6 +44,7 @@ from app.services.admin_login import (
     LoginCodeAttemptsExceededError,
     LoginCodeInvalidError,
     LoginCodeMissingError,
+    consume_admin_login_code,
     generate_numeric_login_code,
     request_admin_login,
     verify_admin_login,
@@ -338,6 +339,8 @@ async def admin_login_verify(
         action=ACTION_ADMIN_LOGIN_VERIFY,
     )
     user = await _require_admin_candidate(session, payload.telegram_id)
+    actual_role = Role.coerce(user.role)
+    requires_totp = actual_role is Role.SUPER_ADMIN and user.totp_enabled
 
     try:
         await verify_admin_login(
@@ -347,6 +350,7 @@ async def admin_login_verify(
             secret=settings.admin_jwt_secret,
             max_attempts=settings.admin_login_max_attempts,
             ttl_seconds=settings.admin_login_code_ttl,
+            consume_on_success=not requires_totp,
         )
     except LoginCodeMissingError as exc:
         raise HTTPException(
@@ -364,8 +368,7 @@ async def admin_login_verify(
             detail="login_code_invalid",
         ) from exc
 
-    actual_role = Role.coerce(user.role)
-    if actual_role is Role.SUPER_ADMIN and user.totp_enabled:
+    if requires_totp:
         if not payload.totp_code or not user.totp_secret:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -382,6 +385,7 @@ async def admin_login_verify(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="totp_invalid",
             )
+        await consume_admin_login_code(redis, telegram_id=user.telegram_id)
 
     await record_admin_login(session, user)
     token_pair, refresh_claims = _mint_token_pair(user, settings)
