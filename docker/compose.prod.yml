@@ -182,6 +182,17 @@ services:
           sleep "$${ACCOUNT_DELETION_INTERVAL_SECONDS:-86400}"
         done
 
+  admin-refresh-sessions-worker:
+    <<: *backend-worker-base
+    container_name: tgai-admin-refresh-sessions-worker
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          python -m app.workers.admin_refresh_sessions
+          sleep "$${ADMIN_REFRESH_SESSIONS_CLEANUP_INTERVAL_SECONDS:-86400}"
+        done
+
   daily-analytics-worker:
     <<: *backend-worker-base
     container_name: tgai-daily-analytics-worker

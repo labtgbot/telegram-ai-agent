@@ -21,6 +21,7 @@ EXPECTED_DEPLOYMENT_WORKERS = {
 
 EXPECTED_CRON_WORKERS = {
     "account-deletion": "app.workers.account_deletion",
+    "admin-refresh-sessions": "app.workers.admin_refresh_sessions",
     "daily-analytics": "app.workers.daily_analytics",
     "subscriptions": "app.workers.subscriptions",
 }

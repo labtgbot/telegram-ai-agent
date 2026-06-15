@@ -47,6 +47,7 @@ services from the same backend image:
 - `video-polling-worker`: `python -m app.workers.video_polling --loop --interval-s 10`
 - `subscriptions-worker`: daily renewal loop
 - `account-deletion-worker`: daily GDPR anonymisation loop
+- `admin-refresh-sessions-worker`: daily admin refresh-session cleanup loop
 - `daily-analytics-worker`: daily analytics snapshot loop
 - `token-usage-partitions-worker`: token usage partition maintenance loop
 

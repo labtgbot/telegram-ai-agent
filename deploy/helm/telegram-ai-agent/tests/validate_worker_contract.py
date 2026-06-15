@@ -28,6 +28,7 @@ EXPECTED_DEPLOYMENTS = {
 
 EXPECTED_CRONJOBS = {
     "account-deletion-worker": ["python", "-m", "app.workers.account_deletion"],
+    "admin-refresh-sessions-worker": ["python", "-m", "app.workers.admin_refresh_sessions"],
     "daily-analytics-worker": ["python", "-m", "app.workers.daily_analytics"],
     "subscriptions-worker": ["python", "-m", "app.workers.subscriptions"],
     "token-usage-partitions": ["python", "-m", "app.workers.token_usage_partitions"],

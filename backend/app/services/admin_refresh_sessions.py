@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.jwt import TokenClaims
@@ -211,3 +213,37 @@ async def revoke_refresh_session(
         refresh_session.revocation_reason = reason
         await session.flush()
     return True
+
+
+async def cleanup_refresh_sessions(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    revoked_retention_seconds: int,
+) -> int:
+    """Delete stale persisted refresh sessions.
+
+    Expired sessions can be removed immediately. Revoked sessions are retained
+    for a full refresh-token TTL so replay detection can still revoke successor
+    chains while the original JWT could otherwise validate.
+    """
+    if revoked_retention_seconds < 0:
+        raise ValueError("revoked_retention_seconds must be non-negative")
+
+    moment = now or _utcnow()
+    revoked_before = moment - timedelta(seconds=revoked_retention_seconds)
+    expired_result = cast(
+        CursorResult[Any],
+        await session.execute(
+            delete(AdminRefreshSession).where(AdminRefreshSession.expires_at <= moment)
+        ),
+    )
+    revoked_result = cast(
+        CursorResult[Any],
+        await session.execute(
+            delete(AdminRefreshSession).where(
+                AdminRefreshSession.revoked_at <= revoked_before
+            )
+        ),
+    )
+    return int(expired_result.rowcount or 0) + int(revoked_result.rowcount or 0)

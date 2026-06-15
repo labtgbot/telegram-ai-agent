@@ -208,6 +208,24 @@ backgroundWorkers:
         limits:
           cpu: 250m
           memory: 256Mi
+    admin-refresh-sessions:
+      enabled: true
+      componentName: admin-refresh-sessions-worker
+      schedule: "20 0 * * *"
+      concurrencyPolicy: Forbid
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 3
+      startingDeadlineSeconds: 21600
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      command: ["python", "-m", "app.workers.admin_refresh_sessions"]
+      resources:
+        requests:
+          cpu: 50m
+          memory: 96Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
     daily-analytics:
       enabled: true
       componentName: daily-analytics-worker

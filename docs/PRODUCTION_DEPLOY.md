@@ -243,7 +243,8 @@ Expected output:
 - `pending_update_count` is `0` after the smoke transaction.
 - `broadcast-worker` and `video-polling-worker` have one ready replica.
 - CronJobs exist for `subscriptions-worker`, `account-deletion-worker`,
-  `daily-analytics-worker`, and `token-usage-partitions`.
+  `admin-refresh-sessions-worker`, `daily-analytics-worker`, and
+  `token-usage-partitions`.
 
 Then verify Grafana:
 
