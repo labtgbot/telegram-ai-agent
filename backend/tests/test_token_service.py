@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import pytest
 
+from app.models.token_usage_log import TokenUsageLog
+from app.models.transaction import Transaction
+from app.models.user import User
 from app.services.balance_cache import BalanceCache
 from app.services.token_service import (
     CREDIT_TYPES,
@@ -163,6 +166,64 @@ async def test_spend_rejects_blank_service() -> None:
         await svc.spend(user_id=1, amount=10, service="")
     with pytest.raises(InvalidAmountError):
         await svc.spend(user_id=1, amount=10, service="   ")
+
+
+@pytest.mark.asyncio
+async def test_spend_truncates_provider_metadata_to_usage_log_limits() -> None:
+    class _Result:
+        def __init__(self, user: User) -> None:
+            self._user = user
+
+        def scalar_one_or_none(self) -> User:
+            return self._user
+
+    class _SpendSession:
+        def __init__(self) -> None:
+            self.info: dict[str, object] = {}
+            self.added: list[object] = []
+            self.user = User(
+                id=1,
+                telegram_id=8_000_021,
+                referral_code="TS-SPEND-LONG",
+                token_balance=500,
+                total_tokens_spent=0,
+                total_requests=0,
+            )
+
+        async def execute(self, _stmt):  # noqa: ANN001
+            return _Result(self.user)
+
+        def add(self, obj: object) -> None:
+            self.added.append(obj)
+
+        async def flush(self) -> None:
+            for obj in self.added:
+                if isinstance(obj, Transaction):
+                    obj.id = 10
+                if isinstance(obj, TokenUsageLog):
+                    assert obj.composio_tool is not None
+                    assert obj.mcp_server is not None
+                    assert len(obj.composio_tool) <= 255
+                    assert len(obj.mcp_server) <= 255
+                    obj.id = 11
+
+    long_tool = "tool-" + ("x" * 300)
+    long_server = "mcp-" + ("y" * 300)
+    session = _SpendSession()
+    svc = TokenService(session)  # type: ignore[arg-type]
+
+    result = await svc.spend(
+        user_id=session.user.id,
+        amount=25,
+        service="composio",
+        composio_tool=long_tool,
+        mcp_server=long_server,
+    )
+
+    usage = next(obj for obj in session.added if isinstance(obj, TokenUsageLog))
+    assert result.usage_log_id == 11
+    assert usage.composio_tool == long_tool[:255]
+    assert usage.mcp_server == long_server[:255]
 
 
 @pytest.mark.asyncio

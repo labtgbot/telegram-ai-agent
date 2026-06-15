@@ -133,6 +133,8 @@ async def test_spend_debits_balance_and_writes_usage_log(db_session):
         db_session, telegram_id=8_000_003, code="TS-SPEND-1", balance=200
     )
     svc = TokenService(db_session)
+    long_tool = "image_tool_" + ("x" * 300)
+    long_server = "mcp_server_" + ("y" * 300)
 
     result = await svc.spend(
         user_id=user.id,
@@ -140,6 +142,8 @@ async def test_spend_debits_balance_and_writes_usage_log(db_session):
         service="image_generation",
         request_params={"prompt": "cat"},
         processing_time_ms=120,
+        composio_tool=long_tool,
+        mcp_server=long_server,
     )
     assert result.new_balance == 150
     assert result.amount == 50
@@ -159,6 +163,8 @@ async def test_spend_debits_balance_and_writes_usage_log(db_session):
     assert log.tokens_consumed == 50
     assert log.service_type == "image_generation"
     assert log.request_params == {"prompt": "cat"}
+    assert log.composio_tool == long_tool[:255]
+    assert log.mcp_server == long_server[:255]
 
 
 @pytest.mark.asyncio
