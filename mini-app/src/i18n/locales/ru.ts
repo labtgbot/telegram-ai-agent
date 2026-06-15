@@ -21,6 +21,13 @@ export const ru: TranslationDict = {
     no: "Нет",
     requiredEmail: "Введите корректный email",
   },
+  errors: {
+    appTitle: "Что-то пошло не так",
+    appBody: "Перезагрузите Mini App и попробуйте ещё раз.",
+    routeTitle: "Не удалось открыть экран",
+    routeBody: "Перезагрузите Mini App, чтобы загрузить экран заново.",
+    reload: "Перезагрузить",
+  },
   home: {
     welcome: "Добро пожаловать",
     greeting: "Привет, {name} — это скелет Mini App для Telegram AI Agent.",
