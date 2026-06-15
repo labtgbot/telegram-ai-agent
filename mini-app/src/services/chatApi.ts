@@ -23,7 +23,7 @@ export interface SendMessageRequest {
 }
 
 export type StreamEvent =
-  | { event: "start"; requestId: string }
+  | { event: "start"; request_id: string }
   | { event: "delta"; content: string }
   | {
       event: "final";
@@ -139,7 +139,7 @@ function dispatchFrame(rawFrame: string, handlers: StreamHandlers): void {
 
   switch (parsed.event) {
     case "start":
-      handlers.onStart?.(parsed.requestId);
+      handlers.onStart?.(parsed.request_id);
       break;
     case "delta":
       handlers.onDelta?.(parsed.content);

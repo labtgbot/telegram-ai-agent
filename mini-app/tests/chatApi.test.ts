@@ -28,7 +28,7 @@ describe("estimateMessageCost", () => {
 describe("streamTextGeneration", () => {
   it("dispatches start, delta and final SSE events", async () => {
     const body = chunkedBody([
-      jsonFrame({ event: "start", requestId: "req-1" }),
+      jsonFrame({ event: "start", request_id: "req-1" }),
       jsonFrame({ event: "delta", content: "Hello" }),
       jsonFrame({ event: "delta", content: " world" }),
       jsonFrame({
@@ -97,7 +97,7 @@ describe("streamTextGeneration", () => {
 
   it("propagates an error event from the stream", async () => {
     const body = chunkedBody([
-      jsonFrame({ event: "start", requestId: "r" }),
+      jsonFrame({ event: "start", request_id: "r" }),
       jsonFrame({ event: "error", error: "stream_failed", message: "nope" }),
       jsonFrame({ event: "done" }),
     ]);
