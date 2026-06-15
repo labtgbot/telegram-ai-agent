@@ -12,6 +12,8 @@ Starlette-version-pinned instrumentation wrapper. This module also adds the
   endpoint inside :pyattr:`Settings.metrics_active_user_window_seconds`.
 * ``payment_events_total`` — counter of payment lifecycle events
   (created/completed/duplicate/failed).
+* ``composio_timeout_without_response_total`` — Composio execute calls that
+  timed out without a provider response and were deliberately not retried.
 
 The module is intentionally side-effect-free at import time: nothing is
 registered globally, the metric objects live in a single ``REGISTRY`` so tests
@@ -50,6 +52,7 @@ REGISTRY: CollectorRegistry = CollectorRegistry()
 
 NAMESPACE = "tgai"
 SUBSYSTEM_BUSINESS = "business"
+SUBSYSTEM_PROVIDER = "provider"
 
 
 tokens_sold_total: Counter = Counter(
@@ -111,6 +114,18 @@ payment_events_total: Counter = Counter(
     registry=REGISTRY,
 )
 
+composio_timeout_without_response_total: Counter = Counter(
+    name="composio_timeout_without_response_total",
+    documentation=(
+        "Composio tool execute calls that timed out without a response and "
+        "were not retried automatically."
+    ),
+    labelnames=("service", "phase"),
+    namespace=NAMESPACE,
+    subsystem=SUBSYSTEM_PROVIDER,
+    registry=REGISTRY,
+)
+
 http_requests_total: Counter = Counter(
     name="http_requests_total",
     documentation="HTTP requests completed by method, route handler and status class.",
@@ -141,6 +156,7 @@ http_requests_in_progress: Gauge = Gauge(
 
 _PACKAGE_FALLBACK = "unknown"
 _SERVICE_FALLBACK = "unknown"
+_PHASE_FALLBACK = "unknown"
 
 
 def _safe_label(value: Any, fallback: str) -> str:
@@ -183,6 +199,17 @@ def observe_payment_event(*, event: str, package: str | None = None) -> None:
     payment_events_total.labels(
         event=_safe_label(event, "unknown"),
         package=_safe_label(package, _PACKAGE_FALLBACK),
+    ).inc()
+
+
+def observe_composio_timeout_without_response(
+    *,
+    service: str | None,
+    phase: str | None,
+) -> None:
+    composio_timeout_without_response_total.labels(
+        service=_safe_label(service, _SERVICE_FALLBACK),
+        phase=_safe_label(phase, _PHASE_FALLBACK),
     ).inc()
 
 
@@ -386,7 +413,9 @@ __all__ = [
     "HttpMetricsMiddleware",
     "REGISTRY",
     "active_users",
+    "composio_timeout_without_response_total",
     "get_active_user_tracker",
+    "observe_composio_timeout_without_response",
     "observe_payment_event",
     "observe_purchase",
     "observe_spend",

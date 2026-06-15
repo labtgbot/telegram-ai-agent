@@ -558,6 +558,7 @@ async def test_submit_creates_queued_job_and_debits_tokens(
     assert call.params["tariff"] == TARIFF_MEDIUM
     assert call.params["duration_s"] == 15
     assert call.metadata == {"app_user_id": "42", "phase": "submit"}
+    assert call.retry_transient_errors is False
 
     # Tokens were debited up-front.
     assert len(fake_tokens.spends) == 1

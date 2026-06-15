@@ -90,6 +90,7 @@ class MockComposioClient:
         service_type: str | None = None,
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        retry_transient_errors: bool = True,
     ) -> ToolResult:
         if not tool or not tool.strip():
             raise ComposioInvalidToolError("tool is required")
@@ -100,6 +101,7 @@ class MockComposioClient:
             user_id=user_id or self._default_user_id,
             request_id=request_id,
             metadata=dict(metadata or {}),
+            retry_transient_errors=retry_transient_errors,
         )
         self.calls.append(invocation)
 
@@ -134,6 +136,7 @@ class MockComposioClient:
         request_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         overrides: dict[str, str] | None = None,
+        retry_transient_errors: bool = True,
     ) -> ToolResult:
         tool = resolve_tool(service_type, overrides=overrides)
         return await self.invoke(
@@ -143,6 +146,7 @@ class MockComposioClient:
             service_type=service_type,
             request_id=request_id,
             metadata=metadata,
+            retry_transient_errors=retry_transient_errors,
         )
 
     async def aclose(self) -> None:

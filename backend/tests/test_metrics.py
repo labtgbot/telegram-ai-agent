@@ -19,7 +19,9 @@ from app.core.metrics import (
     REGISTRY,
     ActiveUserTracker,
     active_users,
+    composio_timeout_without_response_total,
     get_active_user_tracker,
+    observe_composio_timeout_without_response,
     observe_payment_event,
     observe_purchase,
     observe_spend,
@@ -40,6 +42,7 @@ def reset_business_metrics() -> None:
     revenue_stars_total._metrics.clear()
     revenue_usd_total._metrics.clear()
     payment_events_total._metrics.clear()
+    composio_timeout_without_response_total._metrics.clear()
     active_users.set(0)
     reset_active_user_tracker_for_tests()
     yield
@@ -88,6 +91,22 @@ def test_observe_payment_event_records_each_event_type() -> None:
     assert _counter_value(payment_events_total, event="completed", package="starter") == 1
     assert _counter_value(payment_events_total, event="duplicate", package="starter") == 1
     assert _counter_value(payment_events_total, event="renewal", package="pro") == 1
+
+
+def test_observe_composio_timeout_without_response_counts_by_service_and_phase() -> None:
+    observe_composio_timeout_without_response(service="video", phase="submit")
+    observe_composio_timeout_without_response(service=None, phase=None)
+
+    assert _counter_value(
+        composio_timeout_without_response_total,
+        service="video",
+        phase="submit",
+    ) == 1
+    assert _counter_value(
+        composio_timeout_without_response_total,
+        service="unknown",
+        phase="unknown",
+    ) == 1
 
 
 # ----------------------------------------------------- ActiveUserTracker
