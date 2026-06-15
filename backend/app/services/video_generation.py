@@ -74,6 +74,7 @@ SUPPORTED_TARIFFS: Final[frozenset[str]] = frozenset(TARIFF_COST.keys())
 MAX_PROMPT_LENGTH: Final[int] = 2000
 MAX_STYLE_LENGTH: Final[int] = 100
 MAX_REFERENCE_URL_LENGTH: Final[int] = 2000
+VIDEO_JOB_MAX_PROVIDER_ATTEMPTS: Final[int] = 30
 
 # Map of upstream provider statuses → our normalised status.
 _PROVIDER_STATUS_MAP: Final[dict[str, str]] = {
@@ -337,6 +338,11 @@ class VideoGenerationService:
                 provider_error=submission.error,
                 refund_reason="video submit rejected",
             )
+        elif not job.provider_job_id:
+            await self._apply_missing_provider_job_id_failure(
+                job,
+                provider_error=submission.error,
+            )
         else:
             job.status = normalised or "queued"
             job.updated_at = datetime.now(UTC)
@@ -421,9 +427,36 @@ class VideoGenerationService:
         *,
         composio_user_id: str | None,
     ) -> None:
+        provider_job_id = (job.provider_job_id or "").strip()
+        if not provider_job_id:
+            logger.warning(
+                "video.poll_missing_provider_job_id",
+                user_id=job.user_id,
+                job_id=job.id,
+                request_id=job.request_id,
+            )
+            await self._apply_missing_provider_job_id_failure(job, provider_error=None)
+            await self.session.flush()
+            return
+
+        if self._provider_attempts_exhausted(job):
+            logger.warning(
+                "video.poll_attempts_exhausted",
+                user_id=job.user_id,
+                job_id=job.id,
+                attempts=job.attempts,
+                max_attempts=VIDEO_JOB_MAX_PROVIDER_ATTEMPTS,
+            )
+            await self._apply_attempts_exhausted_failure(
+                job,
+                provider_error=job.error_message,
+            )
+            await self.session.flush()
+            return
+
         params: dict[str, Any] = {
             "action": "status",
-            "job_id": job.provider_job_id or "",
+            "job_id": provider_job_id,
         }
         try:
             result = await self.composio.invoke_for_service(
@@ -445,8 +478,22 @@ class VideoGenerationService:
                 error=str(exc),
             )
             job.attempts = (job.attempts or 0) + 1
-            job.error_message = str(exc)
-            job.updated_at = datetime.now(UTC)
+            if self._provider_attempts_exhausted(job):
+                logger.warning(
+                    "video.poll_attempts_exhausted",
+                    user_id=job.user_id,
+                    job_id=job.id,
+                    attempts=job.attempts,
+                    max_attempts=VIDEO_JOB_MAX_PROVIDER_ATTEMPTS,
+                    error=str(exc),
+                )
+                await self._apply_attempts_exhausted_failure(
+                    job,
+                    provider_error=str(exc),
+                )
+            else:
+                job.error_message = str(exc)
+                job.updated_at = datetime.now(UTC)
             await self.session.flush()
             return
 
@@ -480,10 +527,62 @@ class VideoGenerationService:
                 provider_error=result.error,
                 refund_reason="video generation failed",
             )
+        elif self._provider_attempts_exhausted(job):
+            logger.warning(
+                "video.poll_attempts_exhausted",
+                user_id=job.user_id,
+                job_id=job.id,
+                attempts=job.attempts,
+                max_attempts=VIDEO_JOB_MAX_PROVIDER_ATTEMPTS,
+                provider_status=normalised,
+            )
+            await self._apply_attempts_exhausted_failure(
+                job,
+                provider_error=result.error,
+            )
         else:
             job.status = normalised or job.status or "queued"
             job.updated_at = datetime.now(UTC)
         await self.session.flush()
+
+    @staticmethod
+    def _provider_attempts_exhausted(job: VideoJob) -> bool:
+        return int(job.attempts or 0) >= VIDEO_JOB_MAX_PROVIDER_ATTEMPTS
+
+    async def _apply_attempts_exhausted_failure(
+        self,
+        job: VideoJob,
+        *,
+        provider_error: str | None,
+    ) -> None:
+        attempts = int(job.attempts or 0)
+        error_message = (
+            "provider polling did not reach a terminal status "
+            f"after {attempts} provider attempts"
+        )
+        if provider_error:
+            error_message = f"{error_message}: {provider_error}"
+        await self._apply_failure(
+            job,
+            error_code="poll_attempts_exhausted",
+            error_message=error_message,
+            provider_error=provider_error,
+            refund_reason="video poll attempts exhausted",
+        )
+
+    async def _apply_missing_provider_job_id_failure(
+        self,
+        job: VideoJob,
+        *,
+        provider_error: str | None,
+    ) -> None:
+        await self._apply_failure(
+            job,
+            error_code="missing_provider_job_id",
+            error_message="provider did not return a job id for polling",
+            provider_error=provider_error,
+            refund_reason="video provider missing job id",
+        )
 
     async def _apply_success(
         self,
@@ -807,6 +906,7 @@ __all__ = [
     "TARIFF_LONG",
     "TARIFF_MEDIUM",
     "TARIFF_SHORT",
+    "VIDEO_JOB_MAX_PROVIDER_ATTEMPTS",
     "VideoGenerationError",
     "VideoGenerationService",
     "VideoJobNotFoundError",
