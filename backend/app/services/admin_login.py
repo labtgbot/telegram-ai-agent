@@ -5,8 +5,8 @@ The flow has three steps:
 1. ``request_admin_login`` — admin posts their ``telegram_id``.  We mint a
    numeric code, store the (salted) hash in Redis under
    ``admin:login:<telegram_id>``, and (in production) push it to the admin
-   via the bot.  In dev (when ``app_debug`` is on) the code is also
-   returned in the response so e2e tests can complete without a bot.
+   via the bot.  In development environments the code is also returned in
+   the response so e2e tests can complete without a bot.
 2. ``verify_admin_login`` — admin posts ``telegram_id`` + ``code`` (and the
    ``totp_code`` if 2FA is enabled).  We compare the hash in constant time,
    track failed attempts independently from code re-issuance, delete the key,

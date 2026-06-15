@@ -386,6 +386,8 @@ class Settings(BaseSettings):
             offenders.append("COMPOSIO_MODE")
         if mode == COMPOSIO_MODE_MOCK and env not in NON_PRODUCTION_ENVS:
             offenders.append("COMPOSIO_MODE=mock")
+        if self.app_debug and env not in NON_PRODUCTION_ENVS:
+            offenders.append("APP_DEBUG=true")
 
         if env in NON_PRODUCTION_ENVS:
             if offenders:
