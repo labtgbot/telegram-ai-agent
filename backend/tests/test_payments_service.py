@@ -31,6 +31,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.bot.client import TelegramApiError
 from app.models import Transaction, User
@@ -498,6 +499,130 @@ async def test_finalize_is_idempotent_on_duplicate_webhook(db_session):
         )
     ).scalars().all()
     assert len(rows) == 1  # still just the upgraded pending row
+
+
+@pytest.mark.asyncio
+async def test_finalize_duplicate_subscription_keeps_package_subscription_flag(
+    db_session,
+):
+    """A duplicate subscription webhook returns the package flag, not is_recurring."""
+    user = await _make_user(
+        db_session, telegram_id=9_000_011_1, code="PAY-FZ-SUB-DUP"
+    )
+    svc = PaymentService(db_session, client=_fake_client())
+    invoice = await svc.create_invoice(
+        user_id=user.id, package_code="pro_monthly"
+    )
+    charge_id = "charge-sub-dup-1"
+
+    first = await svc.finalize_successful_payment(
+        telegram_user_id=user.telegram_id,
+        payload=invoice.payload,
+        total_amount=invoice.stars_amount,
+        currency=DEFAULT_CURRENCY,
+        telegram_payment_charge_id=charge_id,
+        is_recurring=False,
+    )
+    second = await svc.finalize_successful_payment(
+        telegram_user_id=user.telegram_id,
+        payload=invoice.payload,
+        total_amount=invoice.stars_amount,
+        currency=DEFAULT_CURRENCY,
+        telegram_payment_charge_id=charge_id,
+        is_recurring=False,
+    )
+
+    assert first.is_subscription is True
+    assert second.already_processed is True
+    assert second.transaction_id == first.transaction_id
+    assert second.is_subscription == first.is_subscription
+
+
+@pytest.mark.asyncio
+async def test_finalize_duplicate_race_keeps_package_subscription_flag(
+    monkeypatch,
+):
+    """The IntegrityError duplicate path returns package.is_subscription."""
+    user = User(
+        id=99,
+        telegram_id=9_000_011_2,
+        referral_code="PAY-FZ-SUB-RACE",
+        token_balance=0,
+    )
+    pending = Transaction(
+        id=101,
+        user_id=user.id,
+        tokens_amount=PACKAGES["pro_monthly"].tokens,
+        stars_amount=PACKAGES["pro_monthly"].stars,
+        package_name="pro_monthly",
+        payment_status="pending",
+    )
+    existing = Transaction(
+        id=102,
+        user_id=user.id,
+        tokens_amount=PACKAGES["pro_monthly"].tokens,
+        stars_amount=PACKAGES["pro_monthly"].stars,
+        package_name="pro_monthly",
+        payment_status="completed",
+    )
+
+    class _IntegrityRaceSession:
+        def __init__(self) -> None:
+            self.rollback_calls = 0
+
+        async def flush(self) -> None:
+            raise IntegrityError("UPDATE transactions", {}, Exception("duplicate"))
+
+        async def rollback(self) -> None:
+            self.rollback_calls += 1
+
+    class _LockingTokenService:
+        def __init__(self, session, balance_cache=None) -> None:  # noqa: ANN001
+            self.session = session
+            self.balance_cache = balance_cache
+
+        async def _lock_user(self, user_id: int) -> User:
+            assert user_id == user.id
+            return user
+
+    session = _IntegrityRaceSession()
+    svc = PaymentService(session, client=_fake_client())  # type: ignore[arg-type]
+    lookup_count = 0
+
+    async def _find_completed_by_charge_id(charge_id: str):
+        nonlocal lookup_count
+        assert charge_id == "charge-sub-race-1"
+        lookup_count += 1
+        return None if lookup_count == 1 else existing
+
+    async def _find_pending_invoice(payload: str):
+        assert payload == "pkg=pro_monthly;u=99;n=race"
+        return pending
+
+    async def _get_user(user_id: int):
+        assert user_id == user.id
+        return user
+
+    monkeypatch.setattr(payments_module, "TokenService", _LockingTokenService)
+    monkeypatch.setattr(
+        svc, "_find_completed_by_charge_id", _find_completed_by_charge_id
+    )
+    monkeypatch.setattr(svc, "_find_pending_invoice", _find_pending_invoice)
+    monkeypatch.setattr(svc, "_get_user", _get_user)
+
+    result = await svc.finalize_successful_payment(
+        telegram_user_id=user.telegram_id,
+        payload="pkg=pro_monthly;u=99;n=race",
+        total_amount=PACKAGES["pro_monthly"].stars,
+        currency=DEFAULT_CURRENCY,
+        telegram_payment_charge_id="charge-sub-race-1",
+        is_recurring=False,
+    )
+
+    assert session.rollback_calls == 1
+    assert result.already_processed is True
+    assert result.transaction_id == existing.id
+    assert result.is_subscription is True
 
 
 @pytest.mark.asyncio
