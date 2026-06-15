@@ -31,6 +31,9 @@ class _LimiterCall:
     action: str
 
 
+_COMPOSIO = object()
+
+
 def _user() -> User:
     return User(
         id=7,
@@ -52,13 +55,13 @@ def _client() -> AsyncMock:
     return client
 
 
-def _ctx(*, text: str, client: AsyncMock) -> HandlerContext:
+def _ctx(*, text: str, client: AsyncMock, composio: Any | None = _COMPOSIO) -> HandlerContext:
     return HandlerContext(
         update={"update_id": 1},
         settings=_Settings(),  # type: ignore[arg-type]
         client=client,
         session=AsyncMock(),
-        composio=object(),  # type: ignore[arg-type]
+        composio=composio,  # type: ignore[arg-type]
         message={
             "chat": {"id": 99},
             "from": {"id": 4242, "first_name": "Alice"},
@@ -119,6 +122,87 @@ def _install_blocking_limiter(monkeypatch: pytest.MonkeyPatch) -> list[_LimiterC
     monkeypatch.setattr(handlers_module, "get_redis", lambda: object())
     monkeypatch.setattr(handlers_module, "RateLimiter", _BlockingLimiter, raising=False)
     return calls
+
+
+def _install_user_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_find_user(session: Any, telegram_id: int) -> User | None:
+        assert telegram_id == 4242
+        return _user()
+
+    monkeypatch.setattr(handlers_module, "find_user_by_telegram_id", fake_find_user)
+
+
+def _install_quota_tracker(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    quota_calls: list[str] = []
+
+    async def fake_consume_generation_rate_limit(
+        ctx: HandlerContext,
+        *,
+        user: User,
+        action: str,
+    ) -> bool:
+        quota_calls.append(action)
+        return True
+
+    monkeypatch.setattr(
+        handlers_module,
+        "_consume_generation_rate_limit",
+        fake_consume_generation_rate_limit,
+    )
+    return quota_calls
+
+
+@pytest.mark.asyncio
+async def test_handle_image_does_not_consume_quota_when_composio_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_user_lookup(monkeypatch)
+    quota_calls = _install_quota_tracker(monkeypatch)
+    client = _client()
+
+    await handle_image(_ctx(text="/image a cat", client=client, composio=None))
+
+    assert quota_calls == []
+    client.send_photo.assert_not_awaited()
+    client.send_message.assert_awaited_once_with(
+        99,
+        "Image generation is temporarily unavailable. Please try again later.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_ask_does_not_consume_quota_when_composio_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_user_lookup(monkeypatch)
+    quota_calls = _install_quota_tracker(monkeypatch)
+    client = _client()
+
+    await handle_ask(_ctx(text="/ask hello", client=client, composio=None))
+
+    assert quota_calls == []
+    client.send_message.assert_awaited_once_with(
+        99,
+        "AI chat is temporarily unavailable. Please try again later.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_video_does_not_consume_quota_when_composio_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_user_lookup(monkeypatch)
+    quota_calls = _install_quota_tracker(monkeypatch)
+    client = _client()
+
+    await handle_video(_ctx(text="/video a cat clip", client=client, composio=None))
+
+    assert quota_calls == []
+    client.send_video.assert_not_awaited()
+    client.send_message.assert_awaited_once_with(
+        99,
+        "Video generation is temporarily unavailable. Please try again later.",
+    )
 
 
 @pytest.mark.asyncio
