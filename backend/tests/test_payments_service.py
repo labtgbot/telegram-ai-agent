@@ -35,6 +35,7 @@ from sqlalchemy import select
 from app.bot.client import TelegramApiError
 from app.models import Transaction, User
 from app.models.subscription import Subscription
+from app.services import payments as payments_module
 from app.services.balance_cache import BalanceCache
 from app.services.payment_packages import (
     PACKAGES,
@@ -757,6 +758,90 @@ async def test_process_subscription_renewals_is_idempotent_across_runs(db_sessio
     # touch the subscription again.
     second_pass = await process_subscription_renewals(db_session)
     assert second_pass == []
+
+
+@pytest.mark.asyncio
+async def test_process_subscription_renewals_handles_duplicate_marker_race(
+    db_session,
+    monkeypatch,
+):
+    """A duplicate renewal marker must not abort the rest of the batch."""
+    first_user = await _make_user(
+        db_session, telegram_id=9_000_044, code="PAY-REN-5A"
+    )
+    second_user = await _make_user(
+        db_session, telegram_id=9_000_045, code="PAY-REN-5B"
+    )
+    expired_at = datetime.now(UTC) - timedelta(hours=1)
+    first_sub = Subscription(
+        user_id=first_user.id,
+        plan_code=PRO_PLAN_CODE,
+        starts_at=expired_at - timedelta(days=30),
+        expires_at=expired_at,
+        auto_renew=True,
+        status="active",
+    )
+    second_sub = Subscription(
+        user_id=second_user.id,
+        plan_code=PRO_PLAN_CODE,
+        starts_at=expired_at - timedelta(days=30),
+        expires_at=expired_at,
+        auto_renew=True,
+        status="active",
+    )
+    db_session.add_all([first_sub, second_sub])
+    await db_session.flush()
+
+    real_token_service = payments_module.TokenService
+    raced_marker = f"renewal:{first_sub.id}:0"
+
+    class _RacingTokenService:
+        def __init__(self, session, balance_cache=None) -> None:  # noqa: ANN001
+            self.session = session
+            self.balance_cache = balance_cache
+
+        async def add(self, **kwargs):  # noqa: ANN003
+            if kwargs["payment_id"] == raced_marker:
+                self.session.add(
+                    Transaction(
+                        user_id=kwargs["user_id"],
+                        transaction_type="purchase",
+                        tokens_amount=kwargs["amount"],
+                        stars_amount=kwargs["stars_amount"],
+                        package_name=kwargs["package_name"],
+                        payment_id=kwargs["payment_id"],
+                        payment_status="completed",
+                        payment_method=kwargs["payment_method"],
+                        completed_at=datetime.now(UTC),
+                    )
+                )
+                await self.session.flush()
+            return await real_token_service(self.session, self.balance_cache).add(
+                **kwargs
+            )
+
+    monkeypatch.setattr(payments_module, "TokenService", _RacingTokenService)
+
+    results = await process_subscription_renewals(db_session)
+
+    assert [result.subscription_id for result in results] == [second_sub.id]
+
+    await db_session.refresh(first_sub)
+    await db_session.refresh(second_sub)
+    await db_session.refresh(first_user)
+    await db_session.refresh(second_user)
+
+    assert first_sub.expires_at == expired_at + timedelta(days=PRO_SUBSCRIPTION_DAYS)
+    assert second_sub.expires_at == expired_at + timedelta(days=PRO_SUBSCRIPTION_DAYS)
+    assert first_user.token_balance == 0
+    assert second_user.token_balance == PACKAGES["pro_monthly"].tokens
+
+    first_marker_count = (
+        await db_session.execute(
+            select(Transaction.id).where(Transaction.payment_id == raced_marker)
+        )
+    ).scalars().all()
+    assert first_marker_count == []
 
 
 @pytest.mark.asyncio
