@@ -557,6 +557,22 @@ async def test_update_admin_role_audits(build_app) -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_admin_role_allows_demoting_to_user(build_app) -> None:
+    async with await _client(build_app["app"]) as c:
+        resp = await c.put(
+            "/api/v1/admin/system/admins/2/role",
+            json={"role": "user"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["role"] == "user"
+    assert build_app["admins"][2].role == "user"
+    audit = build_app["audit_log"][-1]
+    assert audit.action == "admin.role.update"
+    assert audit.payload == {"user_id": 2, "before": "support_admin", "after": "user"}
+
+
+@pytest.mark.asyncio
 async def test_update_admin_role_404_when_missing(build_app) -> None:
     async with await _client(build_app["app"]) as c:
         resp = await c.put(
