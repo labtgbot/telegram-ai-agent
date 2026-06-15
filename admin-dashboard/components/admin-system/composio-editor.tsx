@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { putComposioState } from "@/lib/admin-system/browser";
-import type { ComposioState } from "@/lib/admin-system/types";
+import type { ComposioConfig, ComposioState } from "@/lib/admin-system/types";
 import { formatDateTime } from "@/lib/dashboard/format";
 
 import {
@@ -28,12 +28,12 @@ function parseTools(raw: string): string[] {
     .filter(Boolean);
 }
 
-function stringifyConfig(config: Record<string, unknown>): string {
+function stringifyConfig(config: ComposioConfig): string {
   if (!config || Object.keys(config).length === 0) return "{}";
   return JSON.stringify(config, null, 2);
 }
 
-function parseConfig(raw: string): Record<string, unknown> | string {
+function parseConfig(raw: string): ComposioConfig | string {
   const trimmed = raw.trim();
   if (!trimmed) return {};
   let parsed: unknown;
@@ -45,7 +45,7 @@ function parseConfig(raw: string): Record<string, unknown> | string {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return "Config must be a JSON object.";
   }
-  return parsed as Record<string, unknown>;
+  return parsed as ComposioConfig;
 }
 
 export function ComposioEditor({ initial, canEdit }: ComposioEditorProps) {
@@ -94,7 +94,7 @@ export function ComposioEditor({ initial, canEdit }: ComposioEditorProps) {
           Composio integrations
         </h2>
         <p className="text-sm text-slate-500 dark:text-slate-400">
-          Toggle which Composio tools are exposed to the agent and tune connector-specific options.
+          Toggle exposed Composio tools and configure non-secret routing options.
         </p>
       </header>
 
@@ -123,7 +123,7 @@ github.create_issue`}
 
       <Field
         label="Connector config (JSON)"
-        hint="Optional per-tool options. Stored verbatim and exposed to the runtime."
+        hint="Allowed root keys: tool_overrides and tool_options. Credentials belong in environment secrets."
       >
         <textarea
           rows={8}
@@ -136,6 +136,12 @@ github.create_issue`}
           disabled={disabled}
           className={textareaClass}
           spellCheck={false}
+          placeholder={`{
+  "tool_overrides": { "text": "claude" },
+  "tool_options": {
+    "gemini": { "timeout_seconds": 20, "max_retries": 2 }
+  }
+}`}
         />
       </Field>
 
