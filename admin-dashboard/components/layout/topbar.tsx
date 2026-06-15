@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { csrfHeaders } from "@/lib/auth/csrf";
 
 export interface TopbarProps {
   role: string;
@@ -17,7 +18,11 @@ export function Topbar({ role, sub }: TopbarProps) {
   async function logout() {
     setPending(true);
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
+      await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: csrfHeaders(),
+        credentials: "include",
+      });
     } finally {
       setPending(false);
       router.replace("/login");

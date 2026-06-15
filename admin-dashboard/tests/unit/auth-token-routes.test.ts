@@ -4,12 +4,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const persistTokens = vi.fn();
 const clearTokens = vi.fn();
 const readRefreshToken = vi.fn();
+const readCsrfToken = vi.fn();
 
 vi.mock("@/lib/auth/cookies", () => ({
   persistTokens,
   clearTokens,
   readRefreshToken,
+  readCsrfToken,
 }));
+
+function csrfRequest(path: string): Request {
+  return new Request(`https://admin.example${path}`, {
+    method: "POST",
+    headers: { "x-csrf-token": "csrf-token" },
+  });
+}
 
 describe("admin auth token route handlers", () => {
   beforeEach(() => {
@@ -20,6 +29,8 @@ describe("admin auth token route handlers", () => {
     persistTokens.mockReset();
     clearTokens.mockReset();
     readRefreshToken.mockReset();
+    readCsrfToken.mockReset();
+    readCsrfToken.mockResolvedValue("csrf-token");
   });
 
   it("rejects malformed login verify payloads without setting cookies", async () => {
@@ -85,10 +96,25 @@ describe("admin auth token route handlers", () => {
       }),
     );
 
-    const response = await POST();
+    const response = await POST(csrfRequest("/api/auth/refresh"));
 
     expect(response.status).toBe(502);
     expect(await response.json()).toMatchObject({ code: "bad_upstream_token_payload" });
+    expect(persistTokens).not.toHaveBeenCalled();
+    expect(clearTokens).not.toHaveBeenCalled();
+  });
+
+  it("rejects refresh without a valid CSRF token", async () => {
+    const { POST } = await import("@/app/api/auth/refresh/route");
+    readRefreshToken.mockResolvedValue("refresh-token");
+
+    const response = await POST(
+      new Request("https://admin.example/api/auth/refresh", { method: "POST" }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ code: "csrf_token_invalid" });
+    expect(fetch).not.toHaveBeenCalled();
     expect(persistTokens).not.toHaveBeenCalled();
     expect(clearTokens).not.toHaveBeenCalled();
   });
@@ -103,7 +129,7 @@ describe("admin auth token route handlers", () => {
       }),
     );
 
-    const response = await POST();
+    const response = await POST(csrfRequest("/api/auth/logout"));
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok" });
@@ -115,11 +141,25 @@ describe("admin auth token route handlers", () => {
     expect(clearTokens).toHaveBeenCalled();
   });
 
+  it("rejects logout without a valid CSRF token", async () => {
+    const { POST } = await import("@/app/api/auth/logout/route");
+    readRefreshToken.mockResolvedValue("refresh-token");
+
+    const response = await POST(
+      new Request("https://admin.example/api/auth/logout", { method: "POST" }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ code: "csrf_token_invalid" });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(clearTokens).not.toHaveBeenCalled();
+  });
+
   it("clears logout cookies without upstream call when refresh cookie is missing", async () => {
     const { POST } = await import("@/app/api/auth/logout/route");
     readRefreshToken.mockResolvedValue(undefined);
 
-    const response = await POST();
+    const response = await POST(csrfRequest("/api/auth/logout"));
 
     expect(response.status).toBe(200);
     expect(fetch).not.toHaveBeenCalled();

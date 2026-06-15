@@ -1,6 +1,7 @@
 "use client";
 
 import { ApiClient } from "@/lib/api/client";
+import { csrfHeaders } from "@/lib/auth/csrf";
 import { publicEnv } from "@/lib/env";
 
 /**
@@ -15,6 +16,7 @@ function createBrowserClient(): ApiClient {
       try {
         const response = await fetch("/api/auth/refresh", {
           method: "POST",
+          headers: csrfHeaders(),
           credentials: "include",
         });
         if (!response.ok) return undefined;
