@@ -841,6 +841,7 @@ async def process_subscription_renewals(
             Subscription.status == "active",
         )
         .order_by(Subscription.expires_at.asc())
+        .with_for_update(skip_locked=True)
     )
     if limit is not None:
         stmt = stmt.limit(int(limit))
@@ -869,6 +870,7 @@ async def process_subscription_renewals(
             await session.flush()
             continue
 
+        savepoint = await session.begin_nested()
         try:
             credit = await token_service.add(
                 user_id=sub.user_id,
@@ -885,7 +887,19 @@ async def process_subscription_renewals(
                     "renewal": True,
                 },
             )
+        except IntegrityError:
+            await savepoint.rollback()
+            logger.info(
+                "payment.renewal.duplicate_marker",
+                subscription_id=sub.id,
+                user_id=sub.user_id,
+                payment_id=renewal_marker,
+            )
+            sub.expires_at = sub.expires_at + timedelta(days=package.subscription_days)
+            await session.flush()
+            continue
         except UserNotFoundError:
+            await savepoint.rollback()
             logger.warning(
                 "payment.renewal.user_missing",
                 subscription_id=sub.id,
@@ -895,6 +909,8 @@ async def process_subscription_renewals(
             sub.auto_renew = False
             await session.flush()
             continue
+        else:
+            await savepoint.commit()
 
         sub.expires_at = sub.expires_at + timedelta(days=package.subscription_days)
         sub.last_transaction_id = credit.transaction_id
