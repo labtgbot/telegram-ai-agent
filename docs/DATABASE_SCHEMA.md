@@ -111,7 +111,7 @@ CREATE TABLE admin_settings (
     id              SERIAL PRIMARY KEY,
     setting_key     VARCHAR(100) UNIQUE NOT NULL,
     setting_value   JSONB NOT NULL,
-    updated_by      BIGINT,
+    updated_by      BIGINT REFERENCES users(id) ON DELETE SET NULL,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 ```
