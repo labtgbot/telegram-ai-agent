@@ -13,6 +13,7 @@ K8S_VALIDATION_STEP = "Validate Kubernetes manifests against schemas"
 
 USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([^'\"\s#]+)")
 FULL_SHA_REF_RE = re.compile(r"^[^@]+@[0-9a-fA-F]{40}$")
+ACTION_REF_RE = re.compile(r"^(?P<action>[^@]+)@(?P<ref>[0-9a-fA-F]{40})$")
 
 
 def _workflow_files() -> list[Path]:
@@ -26,7 +27,9 @@ def _external_action_ref(ref: str) -> bool:
 def _action_pin_errors() -> list[str]:
     errors: list[str] = []
     for workflow in _workflow_files():
-        for line_number, line in enumerate(workflow.read_text(encoding="utf-8").splitlines(), 1):
+        for line_number, line in enumerate(
+            workflow.read_text(encoding="utf-8").splitlines(), 1
+        ):
             match = USES_RE.match(line)
             if match is None:
                 continue
@@ -35,6 +38,44 @@ def _action_pin_errors() -> list[str]:
             if _external_action_ref(ref) and FULL_SHA_REF_RE.match(ref) is None:
                 rel_path = workflow.relative_to(REPO_ROOT)
                 errors.append(f"{rel_path}:{line_number}: action ref is not SHA-pinned: {ref}")
+    return errors
+
+
+def _action_consistency_errors() -> list[str]:
+    refs_by_action: dict[str, dict[str, list[str]]] = {}
+
+    for workflow in _workflow_files():
+        for line_number, line in enumerate(
+            workflow.read_text(encoding="utf-8").splitlines(), 1
+        ):
+            match = USES_RE.match(line)
+            if match is None:
+                continue
+
+            ref = match.group(1)
+            if not _external_action_ref(ref):
+                continue
+
+            action_ref = ACTION_REF_RE.match(ref)
+            if action_ref is None:
+                continue
+
+            action = action_ref.group("action").lower()
+            sha = action_ref.group("ref").lower()
+            location = f"{workflow.relative_to(REPO_ROOT)}:{line_number}"
+            refs_by_action.setdefault(action, {}).setdefault(sha, []).append(location)
+
+    errors: list[str] = []
+    for action, refs in refs_by_action.items():
+        if len(refs) == 1:
+            continue
+
+        details = "; ".join(
+            f"{sha[:12]} at {', '.join(locations)}"
+            for sha, locations in sorted(refs.items())
+        )
+        errors.append(f"{action}: inconsistent pinned refs: {details}")
+
     return errors
 
 
@@ -67,7 +108,10 @@ def _manifest_validation_errors() -> list[str]:
     deploy_text = DEPLOY_WORKFLOW.read_text(encoding="utf-8")
 
     if "kubeval" in deploy_text:
-        errors.append(f"{DEPLOY_WORKFLOW.relative_to(REPO_ROOT)}: kubeval is deprecated; use kubeconform")
+        errors.append(
+            f"{DEPLOY_WORKFLOW.relative_to(REPO_ROOT)}: "
+            "kubeval is deprecated; use kubeconform"
+        )
 
     block = _step_block(DEPLOY_WORKFLOW, K8S_VALIDATION_STEP)
     if block is None:
@@ -93,7 +137,11 @@ def _manifest_validation_errors() -> list[str]:
 
 
 def main() -> int:
-    errors = _action_pin_errors() + _manifest_validation_errors()
+    errors = (
+        _action_pin_errors()
+        + _action_consistency_errors()
+        + _manifest_validation_errors()
+    )
     if errors:
         print("GitHub workflow validation failed:", file=sys.stderr)
         for error in errors:
