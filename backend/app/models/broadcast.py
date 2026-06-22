@@ -25,6 +25,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -84,6 +85,11 @@ RECIPIENT_STATUSES: tuple[str, ...] = (
 )
 
 
+def _allowed_values_check(column: str, values: tuple[str, ...]) -> str:
+    quoted = ",".join(f"'{value}'" for value in values)
+    return f"{column} IN ({quoted})"
+
+
 class Broadcast(Base):
     __tablename__ = "broadcasts"
 
@@ -133,6 +139,14 @@ class Broadcast(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            _allowed_values_check("status", BROADCAST_STATUSES),
+            name="broadcasts_status_allowed",
+        ),
+        CheckConstraint(
+            _allowed_values_check("audience", BROADCAST_AUDIENCES),
+            name="broadcasts_audience_allowed",
+        ),
         Index("ix_broadcasts_status", "status"),
         Index("ix_broadcasts_scheduled_at", "scheduled_at"),
         Index("ix_broadcasts_created_by", "created_by"),
@@ -179,6 +193,10 @@ class BroadcastRecipient(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            _allowed_values_check("status", RECIPIENT_STATUSES),
+            name="broadcast_recipients_status_allowed",
+        ),
         UniqueConstraint("broadcast_id", "user_id", name="uq_broadcast_recipients_broadcast_id"),
         Index("ix_broadcast_recipients_broadcast_id", "broadcast_id"),
         Index("ix_broadcast_recipients_status", "status"),
