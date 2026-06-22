@@ -1,6 +1,6 @@
 """add admin_settings.updated_by foreign key
 
-Revision ID: 0016_admin_settings_updated_by_fk
+Revision ID: 0016_admin_setting_fk
 Revises: 0015_admin_refresh_sessions
 Create Date: 2026-06-22
 """
@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "0016_admin_settings_updated_by_fk"
+revision: str = "0016_admin_setting_fk"
 down_revision: str | Sequence[str] | None = "0015_admin_refresh_sessions"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
