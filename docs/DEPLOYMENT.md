@@ -963,6 +963,15 @@ kubectl argo rollouts undo telegram-ai-agent-backend -n tgai-prod
 
 ### 12.2 SSH/Compose update
 
+Third-party infra images in `docker/compose.prod.yml` are pinned as
+`tag@sha256:<digest>` so repeated deploys pull the same manifest. Keep the
+digest when changing Caddy/Postgres/Redis images. Prefer Renovate PRs for these
+updates; for a manual change, verify the new manifest first, for example:
+
+```bash
+docker buildx imagetools inspect postgres:15-alpine
+```
+
 ```bash
 cd /opt/telegram-ai-agent/app
 git fetch --tags

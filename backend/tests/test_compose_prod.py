@@ -5,16 +5,25 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import string
 import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO_ROOT / "docker" / "compose.prod.yml"
 CADDY_FILE = REPO_ROOT / "docker" / "Caddyfile.prod"
 MONITORING_COMPOSE_FILE = REPO_ROOT / "deploy" / "monitoring" / "docker-compose.monitoring.yml"
 MONITORING_DOCS_FILE = REPO_ROOT / "docs" / "MONITORING.md"
+RENOVATE_FILE = REPO_ROOT / "renovate.json"
+
+INFRA_IMAGE_SERVICES = {
+    "caddy": "caddy",
+    "postgres": "postgres",
+    "redis": "redis",
+}
 
 COMPOSE_ENV_KEYS = {
     "ACME_EMAIL",
@@ -49,6 +58,16 @@ VALID_ENV = {
     "API_BASE_URL": "http://backend:8000/api/v1",
     "NEXT_PUBLIC_API_BASE_URL": "https://bot.example.com/api/v1",
 }
+
+
+def _assert_digest_pinned_image(image: str) -> None:
+    image_ref, separator, digest = image.partition("@sha256:")
+
+    assert separator == "@sha256:"
+    assert len(digest) == 64
+    assert all(char in string.hexdigits for char in digest)
+    assert ":" in image_ref.rsplit("/", maxsplit=1)[-1]
+    assert not image_ref.endswith(":latest")
 
 
 def _require_docker_compose() -> None:
@@ -135,6 +154,29 @@ def _run_monitoring_compose_config(
         env=_clean_env(),
         capture_output=True,
         text=True,
+    )
+
+
+def test_prod_compose_infra_images_are_digest_pinned() -> None:
+    config = yaml.safe_load(COMPOSE_FILE.read_text(encoding="utf-8"))
+    services = config["services"]
+
+    for service_name, image_name in INFRA_IMAGE_SERVICES.items():
+        image = services[service_name]["image"]
+
+        assert image.startswith(f"{image_name}:")
+        _assert_digest_pinned_image(image)
+
+
+def test_renovate_keeps_docker_compose_digests_controlled() -> None:
+    config = json.loads(RENOVATE_FILE.read_text(encoding="utf-8"))
+
+    assert "docker-compose" in config["enabledManagers"]
+    assert "docker:pinDigests" in config["extends"]
+    assert any(
+        "docker-compose" in rule.get("matchManagers", [])
+        and "docker" in rule.get("matchDatasources", [])
+        for rule in config["packageRules"]
     )
 
 
