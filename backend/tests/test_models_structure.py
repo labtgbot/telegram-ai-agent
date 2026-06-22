@@ -29,6 +29,8 @@ from app.models import (  # noqa: E402
     AdminRefreshSession,
     AdminSetting,
     Base,
+    Broadcast,
+    BroadcastRecipient,
     ChatMessage,
     ChatThread,
     DailyAnalytics,
@@ -110,6 +112,34 @@ def test_transaction_check_constraint():
     assert constraints, "transactions table must have a CHECK constraint"
     assert any("purchase" in str(c.sqltext) for c in constraints)
     assert any("manual_bonus" in str(c.sqltext) for c in constraints)
+
+
+def test_broadcast_check_constraints():
+    broadcast_constraints = [
+        c for c in Broadcast.__table__.constraints if isinstance(c, CheckConstraint)
+    ]
+    recipient_constraints = [
+        c for c in BroadcastRecipient.__table__.constraints if isinstance(c, CheckConstraint)
+    ]
+
+    assert any(
+        "status IN" in str(c.sqltext)
+        and "draft" in str(c.sqltext)
+        and "cancelled" in str(c.sqltext)
+        for c in broadcast_constraints
+    )
+    assert any(
+        "audience IN" in str(c.sqltext)
+        and "premium" in str(c.sqltext)
+        and "inactive_7d" in str(c.sqltext)
+        for c in broadcast_constraints
+    )
+    assert any(
+        "status IN" in str(c.sqltext)
+        and "pending" in str(c.sqltext)
+        and "skipped" in str(c.sqltext)
+        for c in recipient_constraints
+    )
 
 
 def test_transaction_indexes_present():

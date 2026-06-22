@@ -13,6 +13,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import (
     AdminSetting,
+    Broadcast,
+    BroadcastRecipient,
     ChatMessage,
     ChatThread,
     DailyAnalytics,
@@ -89,6 +91,69 @@ async def test_transaction_allowed_types(db_session):
             )
         )
     await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_broadcast_status_check_constraint_rejects_invalid_value(db_session):
+    user = User(telegram_id=999020, referral_code="TEST-DB-020")
+    db_session.add(user)
+    await db_session.flush()
+
+    db_session.add(
+        Broadcast(
+            created_by=user.id,
+            text="hello",
+            audience="all",
+            status="invalid-status",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_broadcast_audience_check_constraint_rejects_invalid_value(db_session):
+    user = User(telegram_id=999021, referral_code="TEST-DB-021")
+    db_session.add(user)
+    await db_session.flush()
+
+    db_session.add(
+        Broadcast(
+            created_by=user.id,
+            text="hello",
+            audience="invalid-audience",
+            status="draft",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_broadcast_recipient_status_check_constraint_rejects_invalid_value(db_session):
+    user = User(telegram_id=999022, referral_code="TEST-DB-022")
+    db_session.add(user)
+    await db_session.flush()
+
+    broadcast = Broadcast(
+        created_by=user.id,
+        text="hello",
+        audience="all",
+        status="draft",
+    )
+    db_session.add(broadcast)
+    await db_session.flush()
+
+    db_session.add(
+        BroadcastRecipient(
+            broadcast_id=broadcast.id,
+            user_id=user.id,
+            telegram_id=user.telegram_id,
+            status="invalid-status",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
 
 
 @pytest.mark.asyncio
