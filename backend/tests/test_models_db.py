@@ -228,6 +228,27 @@ async def test_admin_setting_jsonb_round_trip(db_session):
 
 
 @pytest.mark.asyncio
+async def test_admin_setting_updated_by_is_cleared_when_user_is_deleted(db_session):
+    user = User(telegram_id=999007, referral_code="TEST-DB-007")
+    db_session.add(user)
+    await db_session.flush()
+
+    setting = AdminSetting(
+        setting_key="user-owned-setting",
+        setting_value={"enabled": True},
+        updated_by=user.id,
+    )
+    db_session.add(setting)
+    await db_session.flush()
+
+    await db_session.delete(user)
+    await db_session.flush()
+    await db_session.refresh(setting)
+
+    assert setting.updated_by is None
+
+
+@pytest.mark.asyncio
 async def test_daily_analytics_defaults(db_session):
     today = datetime.now(UTC).date()
     row = DailyAnalytics(date=today)

@@ -167,6 +167,15 @@ def test_admin_setting_columns():
     assert cols["setting_key"].unique is True
 
 
+def test_admin_setting_updated_by_references_user_with_set_null():
+    foreign_keys = AdminSetting.__table__.c.updated_by.foreign_keys
+
+    assert len(foreign_keys) == 1
+    fk = next(iter(foreign_keys))
+    assert fk.target_fullname == "users.id"
+    assert fk.ondelete == "SET NULL"
+
+
 def test_admin_refresh_session_columns_and_indexes():
     table = AdminRefreshSession.__table__
     assert {
