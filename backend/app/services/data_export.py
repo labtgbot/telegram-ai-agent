@@ -229,7 +229,8 @@ async def build_user_data_export(
     chat_messages = await _safe_select(
         session,
         select(ChatMessage)
-        .where(ChatMessage.user_id == user.id)
+        .join(ChatThread, ChatMessage.thread_id == ChatThread.id)
+        .where(ChatThread.user_id == user.id)
         .order_by(ChatMessage.id.asc())
         .limit(max_chat_messages + 1),
         notes=notes,

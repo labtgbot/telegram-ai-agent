@@ -76,10 +76,39 @@ class _FakeSession:
             model = stmt.column_descriptions[0]["type"]
         except (AttributeError, IndexError, KeyError):
             return _ScalarsResult([])
-        return _ScalarsResult(self._queries.get(model, []))
+        rows = self._queries.get(model, [])
+        user_id = self._stmt_user_id(stmt)
+        if model is ChatThread and user_id is not None:
+            return _ScalarsResult([row for row in rows if row.user_id == user_id])
+        if model is ChatMessage and user_id is not None:
+            return _ScalarsResult(self._chat_messages_for_stmt(stmt, user_id))
+        return _ScalarsResult(rows)
 
     async def scalar(self, stmt):  # noqa: ANN001 — duck-typed
         return self._referrals
+
+    def _stmt_user_id(self, stmt):  # noqa: ANN001 — duck-typed
+        try:
+            params = stmt.compile().params
+        except Exception:
+            return None
+        for key, value in params.items():
+            if "user_id" in key:
+                return value
+        return None
+
+    def _chat_messages_for_stmt(self, stmt, user_id: int) -> list[ChatMessage]:  # noqa: ANN001
+        rows = self._queries.get(ChatMessage, [])
+        sql = str(stmt).lower()
+        if "join chat_threads" not in sql or "chat_threads.user_id" not in sql:
+            return [row for row in rows if row.user_id == user_id]
+
+        owned_thread_ids = {
+            row.id
+            for row in self._queries.get(ChatThread, [])
+            if row.user_id == user_id
+        }
+        return [row for row in rows if row.thread_id in owned_thread_ids]
 
 
 @pytest.mark.asyncio
@@ -124,10 +153,15 @@ async def test_export_returns_stable_schema() -> None:
 @pytest.mark.asyncio
 async def test_chat_messages_are_truncated_and_annotated() -> None:
     user = _StubUser()
+    thread = ChatThread(
+        id=1,
+        user_id=user.id,
+        external_id="thread-1",
+    )
     big_chat = [
         ChatMessage(
             id=i,
-            thread_id=1,
+            thread_id=thread.id,
             user_id=user.id,
             role="user",
             content=f"msg {i}",
@@ -141,7 +175,7 @@ async def test_chat_messages_are_truncated_and_annotated() -> None:
         queries={
             Transaction: [],
             Subscription: [],
-            ChatThread: [],
+            ChatThread: [thread],
             ChatMessage: big_chat,
             DailyBonusClaim: [],
         }
@@ -153,6 +187,55 @@ async def test_chat_messages_are_truncated_and_annotated() -> None:
 
     assert len(export.chat_messages) == 4
     assert any("chat_messages: truncated" in note for note in export.notes)
+
+
+@pytest.mark.asyncio
+async def test_chat_message_export_uses_thread_owner_not_denormalized_user_id() -> None:
+    user = _StubUser()
+    owned_thread = ChatThread(
+        id=10,
+        user_id=user.id,
+        external_id="owned-thread",
+    )
+    other_thread = ChatThread(
+        id=20,
+        user_id=999,
+        external_id="other-thread",
+    )
+    owned_message = ChatMessage(
+        id=1,
+        thread_id=owned_thread.id,
+        user_id=user.id,
+        role="user",
+        content="belongs to exported user",
+        tokens_consumed=0,
+        metadata_json=None,
+        created_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    misattributed_message = ChatMessage(
+        id=2,
+        thread_id=other_thread.id,
+        user_id=user.id,
+        role="assistant",
+        content="belongs to a different thread owner",
+        tokens_consumed=0,
+        metadata_json=None,
+        created_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    session = _FakeSession(
+        queries={
+            Transaction: [],
+            Subscription: [],
+            ChatThread: [owned_thread, other_thread],
+            ChatMessage: [owned_message, misattributed_message],
+            DailyBonusClaim: [],
+        }
+    )
+
+    export = await build_user_data_export(session, user=user)  # type: ignore[arg-type]
+
+    assert [row["id"] for row in export.chat_threads] == [owned_thread.id]
+    assert [row["id"] for row in export.chat_messages] == [owned_message.id]
 
 
 @pytest.mark.asyncio

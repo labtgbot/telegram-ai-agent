@@ -13,6 +13,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models import (
     AdminSetting,
+    ChatMessage,
+    ChatThread,
     DailyAnalytics,
     Subscription,
     TokenUsageLog,
@@ -87,6 +89,29 @@ async def test_transaction_allowed_types(db_session):
             )
         )
     await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_chat_message_user_id_must_match_thread_owner(db_session):
+    owner = User(telegram_id=999009, referral_code="TEST-DB-009")
+    other = User(telegram_id=999010, referral_code="TEST-DB-010")
+    db_session.add_all([owner, other])
+    await db_session.flush()
+
+    thread = ChatThread(user_id=owner.id, external_id="owner-thread")
+    db_session.add(thread)
+    await db_session.flush()
+
+    db_session.add(
+        ChatMessage(
+            thread_id=thread.id,
+            user_id=other.id,
+            role="user",
+            content="wrong owner",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
 
 
 @pytest.mark.asyncio

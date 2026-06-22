@@ -23,10 +23,12 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -81,6 +83,7 @@ class ChatThread(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("id", "user_id", name="uq_chat_threads_id_user_id"),
         Index("ix_chat_threads_user_id", "user_id"),
         Index("ix_chat_threads_user_external", "user_id", "external_id", unique=True),
         Index("ix_chat_threads_last_message", "last_message_at"),
@@ -135,6 +138,12 @@ class ChatMessage(Base):
         CheckConstraint(
             "role IN ('system','user','assistant','summary')",
             name="chat_messages_role_allowed",
+        ),
+        ForeignKeyConstraint(
+            ["thread_id", "user_id"],
+            ["chat_threads.id", "chat_threads.user_id"],
+            name="fk_chat_messages_thread_user",
+            ondelete="CASCADE",
         ),
         Index("ix_chat_messages_thread_id_created", "thread_id", "created_at"),
         Index("ix_chat_messages_user_id", "user_id"),

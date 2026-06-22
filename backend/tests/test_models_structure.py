@@ -18,7 +18,9 @@ from sqlalchemy import (  # noqa: E402
     Boolean,
     CheckConstraint,
     DateTime,
+    ForeignKeyConstraint,
     Integer,
+    UniqueConstraint,
     create_mock_engine,
 )
 
@@ -27,6 +29,8 @@ from app.models import (  # noqa: E402
     AdminRefreshSession,
     AdminSetting,
     Base,
+    ChatMessage,
+    ChatThread,
     DailyAnalytics,
     Subscription,
     TokenUsageLog,
@@ -117,6 +121,36 @@ def test_transaction_indexes_present():
         "uq_transactions_payment_id",
         "ix_transactions_payment_status",
     } <= index_names
+
+
+def test_chat_message_user_id_matches_thread_owner_constraint():
+    thread_constraints = {
+        constraint.name: constraint
+        for constraint in ChatThread.__table__.constraints
+    }
+    assert isinstance(
+        thread_constraints.get("uq_chat_threads_id_user_id"),
+        UniqueConstraint,
+    )
+
+    message_constraints = {
+        constraint.name: constraint
+        for constraint in ChatMessage.__table__.constraints
+    }
+    thread_user_fk = message_constraints.get("fk_chat_messages_thread_user")
+    assert isinstance(thread_user_fk, ForeignKeyConstraint)
+    assert [element.parent.name for element in thread_user_fk.elements] == [
+        "thread_id",
+        "user_id",
+    ]
+    assert [element.column.table.name for element in thread_user_fk.elements] == [
+        "chat_threads",
+        "chat_threads",
+    ]
+    assert [element.column.name for element in thread_user_fk.elements] == [
+        "id",
+        "user_id",
+    ]
 
 
 def test_model_create_all_emits_migration_aligned_indexes():
