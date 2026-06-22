@@ -1,0 +1,15 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "docker:pinDigests"],
+  "enabledManagers": ["docker-compose"],
+  "labels": ["dependencies", "devops"],
+  "packageRules": [
+    {
+      "description": "Keep Docker Compose image tag and digest updates reviewable together.",
+      "matchManagers": ["docker-compose"],
+      "matchDatasources": ["docker"],
+      "matchUpdateTypes": ["digest", "major", "minor", "patch"],
+      "groupName": "docker compose image updates"
+    }
+  ]
+}
