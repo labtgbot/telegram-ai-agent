@@ -97,6 +97,7 @@ Workflow, code style, commit conventions — в [`CONTRIBUTING.md`](CONTRIBUTING
 
 ## 📜 Ссылки
 
+- PHP/MySQL hosting installer: [`docs/SHARED_HOSTING_INSTALLER.md`](docs/SHARED_HOSTING_INSTALLER.md)
 - Telegram Bot API: <https://core.telegram.org/bots/api>
 - Mini Apps: <https://core.telegram.org/bots/webapps>
 - Telegram Stars: <https://core.telegram.org/bots/payments#telegram-stars>

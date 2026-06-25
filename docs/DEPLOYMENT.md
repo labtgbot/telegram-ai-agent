@@ -16,9 +16,19 @@ Managed PaaS/container hosting can also work, but you must map the same
 runtime variables, network paths, health checks, migrations, and webhook setup
 described below.
 
+For operators who start from a regular PHP 8.1+ / MySQL hosting account, the
+repo also includes a single-file configuration wizard at
+[`deploy/shared-hosting/install.php`](../deploy/shared-hosting/install.php).
+It prepares env files, Telegram Mini App settings, webhook commands, and a
+BotFather checklist. It does not change the backend runtime requirements:
+FastAPI still needs PostgreSQL and Redis. See
+[`docs/SHARED_HOSTING_INSTALLER.md`](SHARED_HOSTING_INSTALLER.md).
+
 Read this document together with:
 
 - [`docs/PRODUCTION_DEPLOY.md`](PRODUCTION_DEPLOY.md) - launch-day cutover.
+- [`docs/SHARED_HOSTING_INSTALLER.md`](SHARED_HOSTING_INSTALLER.md) - PHP/MySQL
+  hosting wizard for configuration handoff.
 - [`docs/LAUNCH_CHECKLIST.md`](LAUNCH_CHECKLIST.md) - go-live gates.
 - [`docs/BACKUP_RECOVERY.md`](BACKUP_RECOVERY.md) - backup and restore runbook.
 - [`docs/MONITORING.md`](MONITORING.md) - dashboards and alerts.
